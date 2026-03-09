@@ -78,14 +78,38 @@ function autenticarToken(req, res, next) {
 }
 
 // ========================================
-// 🔌 Conexão PostgreSQL
+// 🔌 Conexão PostgreSQL (com suporte a string de conexão)
 // ========================================
-const pool = new Pool({
-  user: DB_USER,
-  host: DB_HOST,
-  database: DB_NAME,
-  password: DB_PASSWORD,
-  port: 5432,
+let pool;
+
+if (process.env.DB_CONNECTION_STRING) {
+  // Usar string de conexão (Neon - produção)
+  console.log('🔌 Conectando via string de conexão (Neon)');
+  pool = new Pool({
+    connectionString: process.env.DB_CONNECTION_STRING,
+    ssl: {
+      rejectUnauthorized: false // Necessário para Neon
+    }
+  });
+} else {
+  // Fallback para conexão local (desenvolvimento)
+  console.log('🔌 Conectando via parâmetros locais');
+  pool = new Pool({
+    user: DB_USER,
+    host: DB_HOST,
+    database: DB_NAME,
+    password: DB_PASSWORD,
+    port: 5432,
+  });
+}
+
+// Testar conexão
+pool.connect((err) => {
+  if (err) {
+    console.error('❌ Erro ao conectar ao banco:', err);
+  } else {
+    console.log('✅ Conectado ao banco de dados com sucesso!');
+  }
 });
 
 // ========================================
