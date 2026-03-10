@@ -2707,7 +2707,7 @@ CPF: __________________________
 });
 
 // ========================================
-// 🤖 IA PARA SUGESTÕES DE MELHORIA (VERSÃO CORRIGIDA)
+// 🤖 IA PARA SUGESTÕES DE MELHORIA (VERSÃO SEM IA - REGRAS DE NEGÓCIO)
 // ========================================
 app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
   try {
@@ -2715,7 +2715,7 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
 
     console.log("🔍 Buscando dados para empresa:", empresaId);
 
-    // Buscar dados da empresa
+    // 1. Buscar dados da empresa com postos e perdas
     const linhas = await pool.query(
       `SELECT l.id, l.nome, l.takt_time_segundos, l.meta_diaria,
         (SELECT json_agg(json_build_object(
@@ -2724,7 +2724,8 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
           'tempo_ciclo', p.tempo_ciclo_segundos,
           'setup', p.tempo_setup_minutos,
           'disponibilidade', p.disponibilidade_percentual,
-          'ordem', p.ordem_fluxo
+          'ordem', p.ordem_fluxo,
+          'cargo_id', p.cargo_id
         )) FROM posto_trabalho p WHERE p.linha_id = l.id) as postos,
         (SELECT json_agg(pl) FROM perdas_linha pl 
          JOIN linha_produto lp ON lp.id = pl.linha_produto_id 
@@ -2739,102 +2740,176 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
     if (linhas.rows.length === 0) {
       return res.json({ 
         sugestoes: { 
-          resumo: "Nenhuma linha encontrada.", 
+          resumo: "Nenhuma linha encontrada para esta empresa.", 
           acoes: [],
           projecoes: {} 
         } 
       });
     }
 
-    // Preparar dados para IA
-    const dadosParaIA = linhas.rows.map(l => ({
-      linha: l.nome,
-      takt: l.takt_time_segundos,
-      meta: l.meta_diaria,
-      postos: (l.postos || []).map(p => ({
-        nome: p.nome,
-        ciclo: p.tempo_ciclo,
-        setup: p.setup,
-        disponibilidade: p.disponibilidade,
-        ordem: p.ordem
-      })),
-      perdas: l.perdas || []
-    }));
+    // 2. Calcular custos dos postos para ganhos reais
+    const custosPorPosto = {};
+    let custoMedioMinuto = 10;
 
-    // Chamar IA com prompt estruturado
-    const prompt = `
-      Você é um consultor sênior da Nexus Engenharia Aplicada, especialista em Lean Manufacturing.
-
-      Analise os dados da empresa abaixo e gere sugestões de melhoria.
-
-      IMPORTANTE: Retorne APENAS um JSON válido com a seguinte estrutura exata:
-      {
-        "resumo": "texto resumido da análise",
-        "acoes": [
-          {
-            "titulo": "título da ação",
-            "descricao": "descrição detalhada",
-            "prioridade": "ALTA/MEDIA/BAIXA",
-            "ferramenta": "SMED / 5S / TPM / Ishikawa / Kaizen / Balanceamento",
-            "ganho": "R$ X.XXX/mês",
-            "esforco": "X dias/semanas",
-            "investimento": "baixo/médio/alto"
+    for (const linha of linhas.rows) {
+      if (linha.postos) {
+        for (const posto of linha.postos) {
+          if (posto.cargo_id) {
+            const cargoRes = await pool.query(
+              "SELECT salario_base, encargos_percentual FROM cargo WHERE id = $1",
+              [posto.cargo_id]
+            );
+            
+            if (cargoRes.rows.length > 0) {
+              const cargo = cargoRes.rows[0];
+              const salario = parseFloat(cargo.salario_base) || 0;
+              const encargos = parseFloat(cargo.encargos_percentual) || 70;
+              const custoMensal = salario * (1 + encargos / 100);
+              const custoPorMinuto = custoMensal / (22 * 8 * 60);
+              custosPorPosto[posto.id] = custoPorMinuto;
+              custoMedioMinuto = (custoMedioMinuto + custoPorMinuto) / 2;
+            }
           }
-        ]
+        }
+      }
+    }
+
+    // 3. Gerar sugestões baseadas em regras de negócio
+    const sugestoes = [];
+    let ganhoTotal = 0;
+
+    for (const linha of linhas.rows) {
+      if (!linha.postos || linha.postos.length === 0) continue;
+
+      // Ordenar postos por ordem de fluxo
+      const postosOrdenados = [...linha.postos].sort((a, b) => a.ordem - b.ordem);
+      
+      // Calcular tempos reais com disponibilidade
+      const postosComCicloReal = postosOrdenados.map(p => ({
+        ...p,
+        cicloReal: (p.tempo_ciclo || 0) / ((p.disponibilidade || 100) / 100)
+      }));
+
+      // Encontrar gargalo (maior ciclo real)
+      let maiorCiclo = 0;
+      let postoGargalo = null;
+      
+      for (const posto of postosComCicloReal) {
+        if (posto.cicloReal > maiorCiclo) {
+          maiorCiclo = posto.cicloReal;
+          postoGargalo = posto;
+        }
       }
 
-      DADOS DA EMPRESA:
-      ${JSON.stringify(dadosParaIA, null, 2)}
+      if (!postoGargalo) continue;
 
-      Analise especialmente:
-      - Postos com setup alto (> 15min) → sugira SMED
-      - Postos com disponibilidade baixa (< 85%) → sugira 5S + TPM
-      - Linhas com gargalo → sugira balanceamento
-      - Perdas com refugo alto → sugira Ishikawa/CEP
+      const custoPosto = custosPorPosto[postoGargalo.id] || custoMedioMinuto;
 
-      Retorne SOMENTE o JSON, sem texto adicional.
-    `;
+      // REGRA 1: Setup alto (> 15 minutos)
+      if (postoGargalo.setup > 15) {
+        const reducaoEstimada = Math.round(postoGargalo.setup * 0.4); // 40% de redução
+        const minutosEconomizados = reducaoEstimada * 22; // por mês
+        const ganho = Math.round(minutosEconomizados * custoPosto);
+        ganhoTotal += ganho;
+        
+        sugestoes.push({
+          titulo: `🔧 Aplicar SMED no posto ${postoGargalo.nome} (${linha.nome})`,
+          descricao: `Setup atual de ${postoGargalo.setup} minutos. Com SMED, estima-se redução para ${postoGargalo.setup - reducaoEstimada} minutos. Ganho de ${minutosEconomizados} minutos/mês.`,
+          prioridade: 'ALTA',
+          ferramenta: 'SMED (Troca Rápida de Ferramentas)',
+          ganho: `R$ ${ganho.toLocaleString()}/mês`,
+          esforco: '2-3 dias',
+          investimento: 'baixo'
+        });
+      }
 
-    const response = await fetch('http://127.0.0.1:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama3.2',
-        prompt: prompt,
-        stream: false,
-        options: {
-          temperature: 0.5,
-          max_tokens: 2000
+      // REGRA 2: Disponibilidade baixa (< 85%)
+      if (postoGargalo.disponibilidade < 85) {
+        const ganho = Math.round(5000);
+        ganhoTotal += ganho;
+        
+        sugestoes.push({
+          titulo: `🧹 Implementar 5S + TPM no posto ${postoGargalo.nome}`,
+          descricao: `Disponibilidade atual de ${postoGargalo.disponibilidade}%. Aplicar 5S para organização e TPM para manutenção autônoma.`,
+          prioridade: 'MÉDIA',
+          ferramenta: '5S + TPM (Manutenção Produtiva Total)',
+          ganho: `R$ ${ganho.toLocaleString()}/mês`,
+          esforco: '1 semana',
+          investimento: 'baixo'
+        });
+      }
+
+      // REGRA 3: Gargalo muito acima da média
+      const mediaCiclo = postosComCicloReal.reduce((acc, p) => acc + p.cicloReal, 0) / postosComCicloReal.length;
+      if (maiorCiclo > mediaCiclo * 1.3) { // 30% acima da média
+        const ganho = Math.round(8000);
+        ganhoTotal += ganho;
+        
+        sugestoes.push({
+          titulo: `⚖️ Balancear linha ${linha.nome}`,
+          descricao: `Gargalo no posto ${postoGargalo.nome} (${maiorCiclo.toFixed(1)}s) está ${((maiorCiclo/mediaCiclo - 1)*100).toFixed(0)}% acima da média. Redistribuir tarefas.`,
+          prioridade: 'ALTA',
+          ferramenta: 'Balanceamento de Linha',
+          ganho: `R$ ${ganho.toLocaleString()}/mês`,
+          esforco: '1 semana',
+          investimento: 'baixo'
+        });
+      }
+
+      // REGRA 4: Perdas por refugo (se houver)
+      if (linha.perdas && linha.perdas.length > 0) {
+        const totalRefugo = linha.perdas.reduce((acc, p) => acc + (p.refugo_pecas || 0), 0);
+        if (totalRefugo > 10) { // mais de 10 peças/dia
+          const ganho = Math.round(totalRefugo * 50 * 22); // R$ 50/peça
+          ganhoTotal += ganho;
+          
+          sugestoes.push({
+            titulo: `📉 Reduzir refugo na linha ${linha.nome}`,
+            descricao: `Refugo atual de ${totalRefugo} peças/dia. Aplicar Ishikawa e CEP para identificar causas raiz.`,
+            prioridade: 'MÉDIA',
+            ferramenta: 'Ishikawa + CEP (Controle Estatístico)',
+            ganho: `R$ ${ganho.toLocaleString()}/mês`,
+            esforco: '2 semanas',
+            investimento: 'baixo'
+          });
         }
-      })
+      }
+    }
+
+    // REGRA 5: Sugestão genérica se não houver nenhuma
+    if (sugestoes.length === 0) {
+      sugestoes.push({
+        titulo: '📋 Realizar diagnóstico detalhado',
+        descricao: 'Os dados atuais não indicam problemas críticos. Recomenda-se um diagnóstico aprofundado para identificar oportunidades.',
+        prioridade: 'MÉDIA',
+        ferramenta: 'Diagnóstico Lean',
+        ganho: 'R$ 0 (investimento)',
+        esforco: '2 semanas',
+        investimento: 'médio'
+      });
+    }
+
+    // Ordenar por prioridade (ALTA primeiro)
+    sugestoes.sort((a, b) => {
+      const prioridade = { 'ALTA': 1, 'MÉDIA': 2, 'BAIXA': 3 };
+      return (prioridade[a.prioridade] || 99) - (prioridade[b.prioridade] || 99);
     });
 
-    if (!response.ok) {
-      throw new Error("Erro na IA");
-    }
+    // Limitar a 5 sugestões
+    const sugestoesLimitadas = sugestoes.slice(0, 5);
 
-    const data = await response.json();
-    
-    // Extrair JSON da resposta
-    const jsonMatch = data.response.match(/\{[\s\S]*\}/);
-    let sugestoes = jsonMatch ? JSON.parse(jsonMatch[0]) : { acoes: [] };
-
-    // Garantir que todas as ações tenham os campos necessários
-    if (sugestoes.acoes) {
-      sugestoes.acoes = sugestoes.acoes.map(acao => ({
-        titulo: acao.titulo || "Melhoria identificada",
-        descricao: acao.descricao || "Analisar oportunidade",
-        prioridade: acao.prioridade || "MÉDIA",
-        ferramenta: acao.ferramenta || "Lean",
-        ganho: acao.ganho || "R$ 1.000/mês",
-        esforco: acao.esforco || "1 semana",
-        investimento: acao.investimento || "baixo"
-      }));
-    }
-
-    console.log("💡 Sugestões geradas:", sugestoes.acoes?.length || 0);
-
-    res.json({ sugestoes });
+    res.json({ 
+      sugestoes: {
+        resumo: `🔍 Análise concluída. Identificamos ${sugestoesLimitadas.length} oportunidades de melhoria com ganho total estimado de R$ ${ganhoTotal.toLocaleString()}/mês.`,
+        acoes: sugestoesLimitadas,
+        projecoes: {
+          novoOEE: '85%',
+          ganhoMensal: `R$ ${ganhoTotal.toLocaleString()}`,
+          tempoEstimado: '2-3 meses',
+          investimentoTotal: 'baixo'
+        }
+      }
+    });
 
   } catch (error) {
     console.error("Erro na rota /api/ia/sugestoes:", error);
