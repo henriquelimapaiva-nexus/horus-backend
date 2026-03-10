@@ -1975,7 +1975,7 @@ app.delete("/alocacoes/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🤖 ROTA PARA IA LOCAL (OLLAMA) - COM BENCHMARK DINÂMICO
+// 🤖 IA PARA RELATÓRIOS (VERSÃO SEM IA)
 // ========================================
 app.post("/api/ia/gerar-relatorio", autenticarToken, async (req, res) => {
   try {
@@ -1985,204 +1985,120 @@ app.post("/api/ia/gerar-relatorio", autenticarToken, async (req, res) => {
       return res.status(400).json({ erro: "Dados e tipo do relatório são obrigatórios." });
     }
 
-    let prompt = "";
-    
+    let relatorio = "";
+
     if (tipo === 'especifico') {
-      // Relatório ESPECÍFICO (linha única)
-      const perdas = dados.perdasFinanceiras || { setup: 0, micro: 0, refugo: 0, total: 0 };
+      // Relatório específico (linha única)
       const oeeAtual = dados.analise?.eficiencia_percentual || 0;
+      const perdas = dados.perdasFinanceiras || { setup: 0, micro: 0, refugo: 0, total: 0 };
       
-      // Definir benchmark baseado no OEE atual
-      let benchmarkOEE, classificacao;
-      if (oeeAtual < 40) {
-        benchmarkOEE = 60;
-        classificacao = "Crítico - necessita intervenção imediata";
-      } else if (oeeAtual < 60) {
-        benchmarkOEE = 75;
-        classificacao = "Regular - grandes oportunidades de melhoria";
-      } else if (oeeAtual < 75) {
-        benchmarkOEE = 85;
-        classificacao = "Bom - próximo do padrão World Class";
-      } else {
-        benchmarkOEE = 90;
-        classificacao = "Excelente - padrão de excelência";
-      }
+      let classificacao = "";
+      if (oeeAtual < 40) classificacao = "Crítico";
+      else if (oeeAtual < 60) classificacao = "Regular";
+      else if (oeeAtual < 75) classificacao = "Bom";
+      else classificacao = "Excelente";
 
-      const postosTabela = dados.postos?.map(p => 
-        `${p.nome} | Ciclo: ${p.tempo_ciclo_segundos || 0}s | Setup: ${p.tempo_setup_minutos || 0}min | Disponibilidade: ${p.disponibilidade_percentual || 0}%`
-      ).join('\n') || 'Nenhum posto cadastrado';
+      relatorio = `
+RELATÓRIO TÉCNICO - ANÁLISE DE LINHA
 
-      prompt = `Você é um consultor sênior da Nexus Engenharia Aplicada, especialista em manufatura enxuta e melhoria contínua.
+Empresa: ${dados.empresa}
+Linha: ${dados.linha}
+Data: ${new Date().toLocaleDateString('pt-BR')}
 
-Gere um RELATÓRIO TÉCNICO PROFISSIONAL detalhado para a empresa CLIENTE (não use "nossa", use "a empresa" ou "o cliente") com base nos dados abaixo.
+1. RESUMO EXECUTIVO
+A linha apresenta OEE de ${oeeAtual}%, classificado como "${classificacao}".
+O gargalo identificado é ${dados.analise?.gargalo || "não identificado"}.
 
-EMPRESA: ${dados.empresa}
-LINHA: ${dados.linha}
-DATA: ${new Date().toLocaleDateString('pt-BR')}
+2. ANÁLISE DO OEE
+O OEE atual está ${oeeAtual < 85 ? "abaixo" : "acima"} do benchmark World Class (85%),
+${oeeAtual < 85 ? "indicando oportunidades significativas de melhoria." : "demonstrando excelente desempenho."}
 
-=== DADOS OPERACIONAIS ===
-• OEE Atual: ${oeeAtual}%
-• Classificação: ${classificacao}
-• Benchmark recomendado: ${benchmarkOEE}%
-• Gargalo: ${dados.analise?.gargalo || "Não identificado"}
-• Takt Time: ${dados.analise?.takt_time_segundos || 0} segundos
-• Capacidade Atual: ${dados.analise?.capacidade_estimada_dia || 0} peças/dia
-• Meta Diária: ${dados.analise?.meta_diaria_planejada || 0} peças/dia
-• Déficit: ${(dados.analise?.meta_diaria_planejada || 0) - (dados.analise?.capacidade_estimada_dia || 0)} peças/dia
+3. ANÁLISE DO GARGALO
+${dados.analise?.gargalo ? 
+  `O gargalo em ${dados.analise.gargalo} limita a capacidade produtiva da linha.` : 
+  "Nenhum gargalo crítico identificado."}
 
-=== ANÁLISE FINANCEIRA ===
-• Custo Mão de Obra: R$ ${(dados.custoMaoObra || 0).toFixed(2)}/mês
-• Custo por minuto: R$ ${(dados.custoMinuto || 0).toFixed(2)}
-• Perdas com Setup: R$ ${perdas.setup.toFixed(2)}/mês (${((perdas.setup/perdas.total)*100).toFixed(1)}% do total)
-• Perdas com Microparadas: R$ ${perdas.micro.toFixed(2)}/mês (${((perdas.micro/perdas.total)*100).toFixed(1)}% do total)
-• Perdas com Refugo: R$ ${perdas.refugo.toFixed(2)}/mês (${((perdas.refugo/perdas.total)*100).toFixed(1)}% do total)
-• TOTAL DE PERDAS: R$ ${perdas.total.toFixed(2)}/mês
-• Perdas representam ${((perdas.total / (dados.custoMaoObra || 1)) * 100).toFixed(1)}% do custo de mão de obra
+4. ANÁLISE FINANCEIRA
+Perdas totais estimadas: R$ ${(perdas.total || 0).toFixed(2)}/mês
+• Setup: R$ ${(perdas.setup || 0).toFixed(2)}/mês
+• Microparadas: R$ ${(perdas.micro || 0).toFixed(2)}/mês
+• Refugo: R$ ${(perdas.refugo || 0).toFixed(2)}/mês
 
-=== ANÁLISE DE BALANCEAMENTO ===
-• Índice de Balanceamento: ${dados.balanceamento?.indice_balanceamento_percentual || 0}%
-• Tempo Médio dos Postos: ${dados.balanceamento?.tempo_medio_segundos || 0} segundos
-• Maior Tempo (Gargalo): ${dados.balanceamento?.maior_tempo_segundos || 0} segundos
-• Menor Tempo: ${dados.balanceamento?.menor_tempo_segundos || 0} segundos
+5. PROJEÇÕES DE MELHORIA
+• Cenário 10%: R$ ${((perdas.total || 0) * 0.1).toFixed(2)}/mês
+• Cenário 20%: R$ ${((perdas.total || 0) * 0.2).toFixed(2)}/mês
+• Cenário 30%: R$ ${((perdas.total || 0) * 0.3).toFixed(2)}/mês
 
-=== POSTOS DE TRABALHO ===
-${postosTabela}
+6. RECOMENDAÇÕES
+• Aplicar SMED nos postos com setup elevado
+• Balancear linha para eliminar gargalos
+• Implementar 5S para melhorar organização
+• Treinar equipe em manutenção autônoma
 
-=== PROJEÇÕES DE MELHORIA ===
-Cenários de redução no gargalo:
-• Cenário 10%: Novo OEE ${(oeeAtual * 1.1).toFixed(1)}%, Ganho R$ ${(perdas.total * 0.1).toFixed(2)}/mês
-• Cenário 20%: Novo OEE ${(oeeAtual * 1.2).toFixed(1)}%, Ganho R$ ${(perdas.total * 0.2).toFixed(2)}/mês
-• Cenário 30%: Novo OEE ${(oeeAtual * 1.3).toFixed(1)}%, Ganho R$ ${(perdas.total * 0.3).toFixed(2)}/mês
+7. PLANO DE AÇÃO
+1. Diagnóstico detalhado (2 semanas)
+2. Implantação de melhorias (4 semanas)
+3. Acompanhamento de resultados (3 meses)
 
-Com base nestes dados, gere um relatório COMPLETO contendo:
-
-1. **RESUMO EXECUTIVO** (visão geral dos principais números e conclusões, destacando a classificação e o gap para o benchmark)
-
-2. **ANÁLISE DO OEE** (desempenho atual, componentes, comparativo com o benchmark adequado para esta empresa)
-
-3. **ANÁLISE DO GARGALO** (identificação, impacto na produção, causas prováveis)
-
-4. **ANÁLISE FINANCEIRA DETALHADA** (distribuição das perdas em R$, impacto no faturamento, oportunidades priorizadas)
-
-5. **PROJEÇÕES DE MELHORIA** (comparativo entre cenários 10%, 20% e 30%)
-
-6. **RECOMENDAÇÕES TÉCNICAS PRIORIZADAS** (ações específicas com prazos sugeridos)
-
-7. **PLANO DE AÇÃO** (tabela com Ação | Responsável | Prazo | Ganho Estimado | Prioridade)
-
-8. **CONCLUSÃO** (resumo e próximos passos)
-
-IMPORTANTE:
-- Use linguagem formal e técnica, própria para diretores industriais
-- DESTAQUE os números reais
-- NÃO use "nossa empresa", use "a empresa do cliente"
-- NÃO use asteriscos ou caracteres especiais para formatação`;
+8. CONCLUSÃO
+A linha apresenta potencial de ganho significativo com baixo investimento.
+Recomenda-se iniciar pelas ações de maior impacto e menor esforço.
+      `;
     } else {
-      // Relatório GERAL (todas as linhas)
-      const perdas = dados.resumoFinanceiro?.perdas || { setup: 0, micro: 0, refugo: 0 };
+      // Relatório geral
       const oeeMedio = dados.resumoFinanceiro?.oeeMedio || 0;
+      const perdas = dados.resumoFinanceiro?.perdas || { setup: 0, micro: 0, refugo: 0 };
       const perdasTotais = dados.resumoFinanceiro?.perdasTotais || 0;
-      const custoMaoObra = dados.resumoFinanceiro?.custoMaoObra || 0;
-      
-      // Definir benchmark baseado no OEE médio
-      let benchmarkOEE, classificacao;
-      if (oeeMedio < 40) {
-        benchmarkOEE = 60;
-        classificacao = "Crítico - necessita intervenção imediata";
-      } else if (oeeMedio < 60) {
-        benchmarkOEE = 75;
-        classificacao = "Regular - grandes oportunidades de melhoria";
-      } else if (oeeMedio < 75) {
-        benchmarkOEE = 85;
-        classificacao = "Bom - próximo do padrão World Class";
-      } else {
-        benchmarkOEE = 90;
-        classificacao = "Excelente - padrão de excelência";
-      }
 
-      const linhasTabela = dados.linhas?.map(l => 
-        `${l.nome} | OEE: ${l.analise?.eficiencia_percentual || 0}% | Gargalo: ${l.analise?.gargalo || "-"} | Custo: R$ ${(dados.resumoFinanceiro?.custosPorLinha?.find(c => c.linha === l.nome)?.custo || 0).toFixed(2)}`
-      ).join('\n') || 'Nenhuma linha cadastrada';
+      relatorio = `
+RELATÓRIO GERAL DE DIAGNÓSTICO
 
-      prompt = `Você é um consultor sênior da Nexus Engenharia Aplicada, especialista em manufatura enxuta e melhoria contínua.
+Empresa: ${dados.empresa}
+Data: ${new Date().toLocaleDateString('pt-BR')}
 
-Gere um RELATÓRIO GERAL DE DIAGNÓSTICO ORGANIZACIONAL detalhado para a empresa CLIENTE (não use "nossa", use "a empresa" ou "o cliente") com base nos dados consolidados abaixo.
+1. RESUMO EXECUTIVO
+A empresa possui ${dados.linhas?.length || 0} linhas de produção,
+com OEE médio de ${oeeMedio}%.
 
-EMPRESA: ${dados.empresa}
-DATA: ${new Date().toLocaleDateString('pt-BR')}
+2. ANÁLISE POR INDICADOR
+• OEE Médio: ${oeeMedio}%
+• Perdas totais: R$ ${perdasTotais.toFixed(2)}/mês
+• Gargalos críticos: ${dados.resumoFinanceiro?.gargalosCriticos || 0}
 
-=== DADOS CONSOLIDADOS ===
-• Total de Linhas: ${dados.linhas?.length || 0}
-• OEE Médio da Planta: ${oeeMedio.toFixed(1)}%
-• Classificação: ${classificacao}
-• Benchmark recomendado: ${benchmarkOEE}%
-• Gap para o benchmark: ${(benchmarkOEE - oeeMedio).toFixed(1)} pontos percentuais
-• Custo Total Mão de Obra: R$ ${custoMaoObra.toFixed(2)}/mês
-• Perdas Totais: R$ ${perdasTotais.toFixed(2)}/mês
-• Perdas representam ${((perdasTotais / (custoMaoObra || 1)) * 100).toFixed(1)}% do custo de mão de obra
-• Gargalos Críticos (OEE < 60%): ${dados.resumoFinanceiro?.gargalosCriticos || 0}
+3. DETALHAMENTO DAS PERDAS
+• Setup: R$ ${(perdas.setup || 0).toFixed(2)}/mês (${((perdas.setup/perdasTotais)*100).toFixed(1)}%)
+• Microparadas: R$ ${(perdas.micro || 0).toFixed(2)}/mês (${((perdas.micro/perdasTotais)*100).toFixed(1)}%)
+• Refugo: R$ ${(perdas.refugo || 0).toFixed(2)}/mês (${((perdas.refugo/perdasTotais)*100).toFixed(1)}%)
 
-=== DETALHAMENTO DAS PERDAS ===
-• Perdas com Setup: R$ ${perdas.setup.toFixed(2)}/mês (${((perdas.setup/(perdasTotais||1))*100).toFixed(1)}%)
-• Perdas com Microparadas: R$ ${perdas.micro.toFixed(2)}/mês (${((perdas.micro/(perdasTotais||1))*100).toFixed(1)}%)
-• Perdas com Refugo: R$ ${perdas.refugo.toFixed(2)}/mês (${((perdas.refugo/(perdasTotais||1))*100).toFixed(1)}%)
+4. RANKING DE LINHAS POR DESEMPENHO
+${dados.linhas?.map((l, idx) => 
+  `${idx+1}. ${l.nome}: OEE ${l.analise?.eficiencia_percentual || 0}%`
+).join('\n')}
 
-=== DETALHAMENTO POR LINHA ===
-${linhasTabela}
+5. OPORTUNIDADES DE MELHORIA
+• Redução de 10% nas perdas: R$ ${(perdasTotais * 0.1).toFixed(2)}/mês
+• Redução de 20% nas perdas: R$ ${(perdasTotais * 0.2).toFixed(2)}/mês
+• Redução de 30% nas perdas: R$ ${(perdasTotais * 0.3).toFixed(2)}/mês
 
-=== OPORTUNIDADES IDENTIFICADAS ===
-• Redução de 10% nas perdas: Ganho R$ ${(perdasTotais * 0.1).toFixed(2)}/mês
-• Redução de 20% nas perdas: Ganho R$ ${(perdasTotais * 0.2).toFixed(2)}/mês
-• Redução de 30% nas perdas: Ganho R$ ${(perdasTotais * 0.3).toFixed(2)}/mês
+6. RECOMENDAÇÕES ESTRATÉGICAS
+• Priorizar ações nas linhas com menor OEE
+• Focar na redução do tipo de perda mais significativo
+• Estabelecer metas progressivas de melhoria
+• Criar programa de treinamento em ferramentas Lean
 
-Com base nestes dados, gere um relatório COMPLETO contendo:
+7. PLANO DE AÇÃO CONSOLIDADO
+• Fase 1: Diagnóstico aprofundado (2 semanas)
+• Fase 2: Implantação piloto (4 semanas)
+• Fase 3: Expansão para todas as linhas (3 meses)
+• Fase 4: Acompanhamento e sustentação (contínuo)
 
-1. **RESUMO EXECUTIVO** (panorama geral da empresa, destacando a classificação e o gap para o benchmark adequado)
-
-2. **ANÁLISE POR INDICADOR** (OEE, perdas, gargalos - sempre comparando com o benchmark dinâmico)
-
-3. **DETALHAMENTO DAS PERDAS** (análise financeira, distribuição, prioridades - destaque o tipo de perda mais relevante)
-
-4. **RANKING DE LINHAS POR DESEMPENHO** (melhores e piores, com recomendações específicas)
-
-5. **OPORTUNIDADES DE MELHORIA** (projeções de ganho com base nos cenários acima)
-
-6. **RECOMENDAÇÕES ESTRATÉGICAS** (ações prioritárias para a empresa como um todo)
-
-7. **PLANO DE AÇÃO CONSOLIDADO** (tabela com Ação | Responsável | Prazo | Ganho Estimado | Prioridade)
-
-8. **CONCLUSÃO** (resumo e próximos passos)
-
-IMPORTANTE:
-- Use linguagem formal e técnica, própria para diretores
-- DESTAQUE os números reais
-- NÃO use "nossa empresa", use "a empresa do cliente"
-- NÃO use asteriscos ou caracteres especiais para formatação`;
+8. CONCLUSÃO
+A empresa possui oportunidades significativas de melhoria.
+Recomenda-se iniciar um programa estruturado de otimização.
+      `;
     }
 
-    // Chamar o Ollama local
-    const response = await fetch('http://127.0.0.1:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama3.2',
-        prompt: prompt,
-        stream: false,
-        options: {
-          temperature: 0.7,
-          max_tokens: 3000
-        }
-      })
-    });
-
-    if (!response.ok) {
-      const erroTexto = await response.text();
-      console.error("Erro no Ollama:", erroTexto);
-      return res.status(500).json({ erro: "Erro ao comunicar com IA local" });
-    }
-
-    const data = await response.json();
-    res.json({ relatorio: data.response });
+    res.json({ relatorio });
 
   } catch (error) {
     console.error("Erro na rota /api/ia/gerar-relatorio:", error);
@@ -2330,7 +2246,7 @@ app.get("/consultor/debug", async (req, res) => {
 });
 
 // ========================================
-// 🤖 IA PARA PROPOSTA COMERCIAL
+// 🤖 IA PARA PROPOSTA COMERCIAL (VERSÃO SEM IA)
 // ========================================
 app.post("/api/ia/gerar-proposta", autenticarToken, async (req, res) => {
   try {
@@ -2340,74 +2256,61 @@ app.post("/api/ia/gerar-proposta", autenticarToken, async (req, res) => {
       return res.status(400).json({ erro: "Dados da proposta são obrigatórios" });
     }
 
-    const prompt = `
-      Você é um consultor sênior da Nexus Engenharia Aplicada, especialista em escrever propostas comerciais detalhadas e profissionais.
+    const proposta = `
+NEXUS ENGENHARIA APLICADA
+PROPOSTA COMERCIAL
 
-      Com base nos dados abaixo, gere uma PROPOSTA COMERCIAL COMPLETA e DETALHADA.
+Data: ${dadosProposta.data || new Date().toLocaleDateString('pt-BR')}
+Validade: 15 dias
 
-      DADOS DA EMPRESA:
-      Empresa: ${dadosProposta.empresa || "Cliente"}
-      Data: ${dadosProposta.data || new Date().toLocaleDateString('pt-BR')}
+À
+${dadosProposta.empresa || "Cliente"}
+At.: Diretoria
 
-      DIAGNÓSTICO ATUAL:
-      • OEE Médio: ${dadosProposta.diagnostico?.oeeMedio || "XX"}%
-      • Perdas Totais: R$ ${(dadosProposta.diagnostico?.perdasTotais || 0).toFixed(2)}/mês
-      • Gargalos Críticos: ${dadosProposta.diagnostico?.gargalosCriticos || 0}
-      • Linhas: ${dadosProposta.diagnostico?.totalLinhas || 0}
-      • Postos: ${dadosProposta.diagnostico?.totalPostos || 0}
+Prezados,
 
-      ESCOPO DO TRABALHO:
-      • Diagnóstico: ${dadosProposta.escopo?.diagnostico || "2 semanas"}
-      • Implementação: ${dadosProposta.escopo?.implementacao || "4 semanas"}
-      • Acompanhamento: ${dadosProposta.escopo?.acompanhamento || "3 meses"}
+Após análise detalhada, apresentamos nossa proposta para otimização dos processos produtivos.
 
-      INVESTIMENTO:
-      • Honorários totais: R$ ${(dadosProposta.investimento?.honorarios || 0).toFixed(2)}
-      • Entrada (50%): R$ ${(dadosProposta.investimento?.entrada || 0).toFixed(2)}
-      • Saldo (50%): R$ ${(dadosProposta.investimento?.saldo || 0).toFixed(2)}
+1. DIAGNÓSTICO ATUAL
+• OEE Médio: ${dadosProposta.diagnostico?.oeeMedio || "XX"}%
+• Perdas Totais: R$ ${(dadosProposta.diagnostico?.perdasTotais || 0).toFixed(2)}/mês
+• Gargalos Críticos: ${dadosProposta.diagnostico?.gargalosCriticos || 0}
+• Linhas: ${dadosProposta.diagnostico?.totalLinhas || 0}
+• Postos: ${dadosProposta.diagnostico?.totalPostos || 0}
 
-      RETORNO SOBRE INVESTIMENTO:
-      • Ganho Mensal Projetado: R$ ${(dadosProposta.retorno?.ganhoMensal || 0).toFixed(2)}
-      • ROI Anual: ${dadosProposta.retorno?.roiAnual || "XX"}%
-      • Payback: ${dadosProposta.retorno?.payback || "XX"} meses
+2. ESCOPO DO TRABALHO
+• Diagnóstico: ${dadosProposta.escopo?.diagnostico || "2 semanas"}
+• Implementação: ${dadosProposta.escopo?.implementacao || "4 semanas"}
+• Acompanhamento: ${dadosProposta.escopo?.acompanhamento || "3 meses"}
 
-      Gere uma proposta completa contendo:
+3. INVESTIMENTO
+• Honorários totais: R$ ${(dadosProposta.investimento?.honorarios || 0).toFixed(2)}
+• Entrada (50%): R$ ${(dadosProposta.investimento?.entrada || 0).toFixed(2)}
+• Saldo (50%): R$ ${(dadosProposta.investimento?.saldo || 0).toFixed(2)}
 
-      1. CABEÇALHO (número da proposta, data, validade)
-      2. APRESENTAÇÃO DA NEXUS
-      3. DIAGNÓSTICO ATUAL (detalhado)
-      4. ESCOPO DO TRABALHO (dividido em fases)
-      5. INVESTIMENTO (detalhado com opções de pagamento)
-      6. RETORNO SOBRE INVESTIMENTO (projeções)
-      7. CRONOGRAMA
-      8. CONDIÇÕES GERAIS
-      9. PRÓXIMOS PASSOS
-      10. ASSINATURAS
+4. RETORNO SOBRE INVESTIMENTO
+• Ganho Mensal: R$ ${(dadosProposta.retorno?.ganhoMensal || 0).toFixed(2)}
+• ROI Anual: ${dadosProposta.retorno?.roiAnual || "XX"}%
+• Payback: ${dadosProposta.retorno?.payback || "XX"} meses
 
-      Use linguagem formal e profissional. Seja detalhista.
-      Não use asteriscos ou formatação especial.
-    `;
+5. CRONOGRAMA
+• Semana 1-2: Diagnóstico aprofundado
+• Semana 3-6: Implementação das melhorias
+• Semana 7-18: Acompanhamento e sustentação
 
-    const response = await fetch('http://127.0.0.1:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama3.2',
-        prompt: prompt,
-        stream: false,
-        options: {
-          temperature: 0.7,
-          max_tokens: 3000
-        }
-      })
-    });
+6. CONDIÇÕES GERAIS
+• Validade: 15 dias
+• Início: mediante assinatura do contrato
+• Horário: segunda a sexta, 8h às 18h
 
-    if (!response.ok) {
-      throw new Error("Erro na IA");
-    }
+Atenciosamente,
 
-    const data = await response.json();
-    res.json({ proposta: data.response });
+__________________________
+Eng. Responsável
+Nexus Engenharia Aplicada
+`;
+
+    res.json({ proposta });
 
   } catch (error) {
     console.error("Erro na rota /api/ia/gerar-proposta:", error);
@@ -2416,7 +2319,7 @@ app.post("/api/ia/gerar-proposta", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🤖 IA PARA PROPOSTA COMPLETA (VERSÃO PROFISSIONAL)
+// 🤖 IA PARA PROPOSTA COMPLETA (VERSÃO SEM IA)
 // ========================================
 app.post("/api/ia/gerar-proposta-completa", autenticarToken, async (req, res) => {
   try {
@@ -2426,53 +2329,8 @@ app.post("/api/ia/gerar-proposta-completa", autenticarToken, async (req, res) =>
       return res.status(400).json({ erro: "Dados da empresa são obrigatórios" });
     }
 
-    // Formatar dados das linhas para o prompt
-    const linhasDetalhadas = dados.dadosLinhas?.map(l => 
-      `• ${l.nome}: OEE ${l.oee}%, Gargalo: ${l.gargalo}, Capacidade: ${l.capacidade} peças/dia, ${l.postos} postos`
-    ).join('\n      ') || 'Nenhuma linha cadastrada';
-
-const prompt = `
-Você é um consultor sênior da Nexus Engenharia Aplicada, especialista em escrever propostas comerciais e contratos de alto nível para diretores industriais.
-
-Com base nos dados abaixo, gere uma PROPOSTA COMERCIAL COMPLETA seguida de uma MINUTA DE CONTRATO.
-
-A proposta deve:
-- Usar linguagem formal, técnica e confiante
-- Ter aparência profissional
-- Transmitir SERIEDADE e COMPETÊNCIA
-- NÃO usar placeholders como [LOGO NEXUS] ou [NÚMERO] - eles serão substituídos pelo sistema
-- Incluir linhas para assinatura (__________________________)
-
-DADOS DA EMPRESA CLIENTE:
-Empresa: ${dados.empresa}
-Data: ${dados.data}
-
-DIAGNÓSTICO ATUAL:
-• OEE Médio: ${dados.oeeMedio}%
-• Perdas Totais: R$ ${(dados.perdasTotais || 0).toFixed(2)}/mês
-• Gargalos Críticos: ${dados.gargalosCriticos || 0}
-• Linhas de Produção: ${dados.totalLinhas || 0}
-• Postos de Trabalho: ${dados.totalPostos || 0}
-
-DETALHAMENTO POR LINHA:
-${dados.dadosLinhas?.map(l => 
-  `• ${l.nome}: OEE ${l.oee}%, Gargalo: ${l.gargalo}, Capacidade: ${l.capacidade} peças/dia, ${l.postos} postos`
-).join('\n')}
-
-INVESTIMENTO:
-• Honorários totais: R$ ${(dados.honorarios || 0).toFixed(2)}
-• Entrada (50%): R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}
-• Saldo (50%): R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}
-
-RETORNO PROJETADO:
-• Ganho Mensal: R$ ${(dados.ganhoMensal || 0).toFixed(2)}
-• ROI Anual: ${dados.roiAnual || 0}%
-• Payback: ${dados.payback || 0} meses
-
-============================================================================
-PARTE 1 - PROPOSTA COMERCIAL
-============================================================================
-
+    // Gerar a proposta COMPLETA usando os dados (sem IA)
+    const proposta = `
 NEXUS ENGENHARIA APLICADA
 PROPOSTA COMERCIAL Nº ___/2026
 
@@ -2677,28 +2535,7 @@ RG: __________________________
 CPF: __________________________
 `;
 
-    const response = await fetch('http://127.0.0.1:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama3.2',
-        prompt: prompt,
-        stream: false,
-        options: {
-          temperature: 0.7,
-          max_tokens: 8000
-        }
-      })
-    });
-
-    if (!response.ok) {
-      const erroTexto = await response.text();
-      console.error("Erro no Ollama:", erroTexto);
-      return res.status(500).json({ erro: "Erro ao comunicar com IA local" });
-    }
-
-    const data = await response.json();
-    res.json({ proposta: data.response });
+    res.json({ proposta });
 
   } catch (error) {
     console.error("Erro na rota /api/ia/gerar-proposta-completa:", error);
