@@ -212,6 +212,63 @@ app.post("/linhas", async (req, res) => {
 });
 
 // ========================================
+// 🏭 CRIAR LINHA COM MÚLTIPLOS PRODUTOS (NOVA ROTA)
+// ========================================
+app.post("/linhas-com-multiplos-produtos", autenticarToken, async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { empresa_id, nome, produtos_ids, takt_time_segundos, meta_diaria } = req.body;
+
+    // Validar se veio pelo menos um produto
+    if (!produtos_ids || produtos_ids.length === 0) {
+      return res.status(400).json({ erro: "Selecione pelo menos um produto" });
+    }
+
+    // Validar campos obrigatórios
+    if (!empresa_id || !nome || !takt_time_segundos || !meta_diaria) {
+      return res.status(400).json({ erro: "Todos os campos são obrigatórios" });
+    }
+
+    // 1. Criar a linha
+    const linhaRes = await client.query(
+      `INSERT INTO linha_producao (empresa_id, nome, takt_time_segundos, meta_diaria)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id`,
+      [empresa_id, nome, takt_time_segundos, meta_diaria]
+    );
+    
+    const linhaId = linhaRes.rows[0].id;
+
+    // 2. Para cada produto, criar vínculo
+    for (const produto_id of produtos_ids) {
+      await client.query(
+        `INSERT INTO linha_produto (linha_id, produto_id)
+         VALUES ($1, $2)`,
+        [linhaId, produto_id]
+      );
+    }
+
+    await client.query('COMMIT');
+    
+    res.status(201).json({ 
+      mensagem: "Linha criada com sucesso",
+      linha_id: linhaId,
+      quantidade_produtos: produtos_ids.length
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("Erro ao criar linha com múltiplos produtos:", error);
+    res.status(500).json({ erro: "Erro no servidor" });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
 // 🏗 POSTOS DE TRABALHO
 // ========================================
 
