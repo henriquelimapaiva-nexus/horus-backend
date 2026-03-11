@@ -2424,7 +2424,7 @@ Consultor Sênior - CREA/SP __________________________________
 Nexus Engenharia Aplicada
 
 ═══════════════════════════════════════════════════════════════════
-                     M I N U T A   D O   C O N T R A T O                    
+             M I N U T A   D O   C O N T R A T O                    
 ═══════════════════════════════════════════════════════════════════
 
 
@@ -2440,53 +2440,38 @@ As partes, acima identificadas, têm entre si justo e contratado o seguinte:
 
 CLÁUSULA 1 - OBJETO
 1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, conforme escopo detalhado na Proposta Comercial Nº ___/2026, que passa a fazer parte integrante deste instrumento.
-
 1.2. Os serviços compreendem as fases detalhadas no item 2 da Proposta Comercial (Diagnóstico Aprofundado, Implantação das Melhorias e Acompanhamento).
-
 1.3. Qualquer serviço ou atividade não previsto expressamente neste contrato será considerado serviço extraordinário, podendo ser executado mediante novo orçamento e aprovação prévia da CONTRATANTE, com custos adicionais.
 
 CLÁUSULA 2 - OBRIGAÇÕES DA CONTRATADA
 2.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis.
-
 2.2. Fornecer equipe técnica qualificada e compatível com a natureza dos serviços.
-
 2.3. Entregar os relatórios e documentações previstos no escopo, nos prazos estipulados.
-
 2.4. Manter absoluto sigilo sobre todas as informações da CONTRATANTE a que tiver acesso.
-
 2.5. A responsabilidade da CONTRATADA é de MEIO, não de resultado, não respondendo por resultados específicos que dependam de fatores alheios ao seu controle.
 
 CLÁUSULA 3 - OBRIGAÇÕES DA CONTRATANTE
 3.1. Fornecer acesso irrestrito às áreas produtivas, instalações e informações necessárias à execução dos serviços.
-
 3.2. Indicar um responsável técnico como contato oficial durante a vigência do contrato.
-
 3.3. Disponibilizar dados históricos de produção, manutenção e qualidade quando solicitados.
-
 3.4. Efetuar os pagamentos nas datas e condições estipuladas.
-
 3.5. Implementar as recomendações acordadas, quando for o caso, sendo de sua inteira responsabilidade os resultados decorrentes da não implementação.
 
 CLÁUSULA 4 - PRAZO E VIGÊNCIA
 4.1. O presente contrato vigorará pelo prazo de ${parseInt(dados.mesesAcompanhamento || 3) + 2} meses, contados da data de assinatura.
-
 4.2. O prazo poderá ser prorrogado mediante aditivo contratual, por acordo entre as partes.
-
 4.3. O início dos serviços está condicionado ao pagamento da entrada estipulada na Cláusula 5.
 
 CLÁUSULA 5 - VALOR E CONDIÇÕES DE PAGAMENTO
 5.1. O valor total dos serviços é de R$ ${(dados.honorarios || 0).toFixed(2)}.
-
 5.2. Condições de pagamento:
     - 50% (R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}) na assinatura do contrato
     - 50% (R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}) na entrega da Fase 2
-
 5.3. O pagamento deverá ser efetuado mediante depósito/transferência na conta:
     Banco: [Banco]
     Agência: [Agência]
     Conta: [Conta]
     Titular: NEXUS ENGENHARIA APLICADA
-
 5.4. O atraso no pagamento sujeitará a CONTRATANTE a:
     - Multa de 2% (dois por cento) sobre o valor da parcela
     - Juros de mora de 1% (um por cento) ao mês, calculados pro rata die
@@ -2494,16 +2479,12 @@ CLÁUSULA 5 - VALOR E CONDIÇÕES DE PAGAMENTO
 
 CLÁUSULA 6 - PROPRIEDADE INTELECTUAL
 6.1. Toda a metodologia, know-how, softwares, técnicas, ferramentas e materiais desenvolvidos e utilizados pela CONTRATADA são de sua propriedade exclusiva.
-
 6.2. Os relatórios e documentos entregues à CONTRATANTE destinam-se ao seu uso exclusivo no âmbito do objeto contratado.
-
 6.3. Fica expressamente proibida a utilização da metodologia Nexus pela CONTRATANTE após o término do contrato, salvo mediante nova contratação.
 
 CLÁUSULA 7 - CONFIDENCIALIDADE
 7.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais a que tiverem acesso em razão deste contrato.
-
 7.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término do contrato.
-
 7.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento.
 
 CLÁUSULA 8 - RESCISÃO
@@ -2511,21 +2492,16 @@ CLÁUSULA 8 - RESCISÃO
     a) Descumprimento de qualquer cláusula contratual, não sanado em 15 (quinze) dias após notificação;
     b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias;
     c) Por caso fortuito ou força maior que impeça a execução do objeto.
-
 8.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato.
-
 8.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá os valores recebidos, atualizados, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato.
 
 CLÁUSULA 9 - PENALIDADES
 9.1. Pelo descumprimento de qualquer obrigação contratual não especificamente penalizada em outras cláusulas, será aplicada multa de 10% (dez por cento) sobre o valor total do contrato.
-
 9.2. A multa prevista no item 9.1 poderá ser reduzida equitativamente pelo juiz nos termos do Art. 413 do Código Civil.
 
 CLÁUSULA 10 - DISPOSIÇÕES GERAIS
 10.1. Este contrato é celebrado em caráter intuitu personae, não podendo a CONTRATANTE ceder ou transferir seus direitos e obrigações sem prévia anuência da CONTRATADA.
-
 10.2. As comunicações entre as partes serão consideradas válidas quando enviadas por e-mail para os endereços indicados.
-
 10.3. A tolerância quanto ao descumprimento de qualquer cláusula não constituirá renúncia aos direitos previstos neste contrato.
 
 CLÁUSULA 11 - FORO
@@ -3138,6 +3114,67 @@ app.get("/checklist/criar-teste", async (req, res) => {
     res.status(500).json({ 
       erro: "Erro ao criar projeto: " + error.message 
     });
+  }
+});
+
+// ========================================
+// ✏️ ATUALIZAR EMPRESA
+// ========================================
+app.put("/empresas/:id", autenticarToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      nome,
+      cnpj,
+      segmento,
+      regime_tributario,
+      turnos,
+      dias_produtivos_mes,
+      meta_mensal
+    } = req.body;
+
+    const result = await pool.query(
+      `UPDATE empresa SET
+        nome = COALESCE($1, nome),
+        cnpj = COALESCE($2, cnpj),
+        segmento = COALESCE($3, segmento),
+        regime_tributario = COALESCE($4, regime_tributario),
+        turnos = COALESCE($5, turnos),
+        dias_produtivos_mes = COALESCE($6, dias_produtivos_mes),
+        meta_mensal = COALESCE($7, meta_mensal)
+      WHERE id = $8
+      RETURNING *`,
+      [nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("Erro ao atualizar empresa:", error);
+    res.status(500).json({ erro: "Erro no servidor" });
+  }
+});
+
+// ========================================
+// 🗑️ EXCLUIR EMPRESA
+// ========================================
+app.delete("/empresas/:id", autenticarToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await pool.query("DELETE FROM empresa WHERE id = $1 RETURNING *", [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    res.json({ mensagem: "Empresa excluída com sucesso" });
+  } catch (error) {
+    console.error("Erro ao excluir empresa:", error);
+    res.status(500).json({ erro: "Erro no servidor" });
   }
 });
 
