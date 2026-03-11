@@ -1729,6 +1729,30 @@ app.delete("/produtos/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 📦 PRODUTOS POR EMPRESA (NOVA ROTA)
+// ========================================
+app.get("/produtos/empresa/:empresaId", autenticarToken, async (req, res) => {
+  try {
+    const { empresaId } = req.params;
+    
+    // Buscar produtos vinculados às linhas da empresa
+    const result = await pool.query(`
+      SELECT DISTINCT p.* 
+      FROM produto p
+      JOIN linha_produto lp ON lp.produto_id = p.id
+      JOIN linha_producao l ON l.id = lp.linha_id
+      WHERE l.empresa_id = $1
+      ORDER BY p.nome
+    `, [empresaId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Erro ao buscar produtos da empresa:", error);
+    res.status(500).json({ erro: "Erro no servidor" });
+  }
+});
+
+// ========================================
 // 📋 LISTAR PRODUTOS VINCULADOS A UMA LINHA
 // ========================================
 
