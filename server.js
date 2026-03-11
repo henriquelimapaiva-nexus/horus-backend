@@ -1729,20 +1729,18 @@ app.delete("/produtos/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 📦 PRODUTOS POR EMPRESA (NOVA ROTA)
+// 📦 PRODUTOS POR EMPRESA (VERSÃO SIMPLIFICADA)
 // ========================================
 app.get("/produtos/empresa/:empresaId", autenticarToken, async (req, res) => {
   try {
     const { empresaId } = req.params;
     
-    // Buscar produtos vinculados às linhas da empresa
+    // ✅ Busca direta na tabela produto, sem JOIN
     const result = await pool.query(`
-      SELECT DISTINCT p.* 
-      FROM produto p
-      JOIN linha_produto lp ON lp.produto_id = p.id
-      JOIN linha_producao l ON l.id = lp.linha_id
-      WHERE l.empresa_id = $1
-      ORDER BY p.nome
+      SELECT * 
+      FROM produto 
+      WHERE empresa_id = $1
+      ORDER BY nome
     `, [empresaId]);
 
     res.json(result.rows);
