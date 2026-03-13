@@ -1743,16 +1743,15 @@ app.delete("/produtos/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 📦 PRODUTOS POR EMPRESA (VERSÃO SIMPLIFICADA)
+// 📦 PRODUTOS POR EMPRESA (CORRIGIDO: TABELA NO PLURAL)
 // ========================================
 app.get("/produtos/empresa/:empresaId", autenticarToken, async (req, res) => {
   try {
     const { empresaId } = req.params;
     
-    // ✅ Busca direta na tabela produto, sem JOIN
+    // ✅ Alterado de 'produto' para 'produtos' para bater com o Banco de Dados
     const result = await pool.query(`
-      SELECT * 
-      FROM produto 
+      SELECT * FROM produtos 
       WHERE empresa_id = $1
       ORDER BY nome
     `, [empresaId]);
@@ -1760,7 +1759,7 @@ app.get("/produtos/empresa/:empresaId", autenticarToken, async (req, res) => {
     res.json(result.rows);
   } catch (error) {
     console.error("Erro ao buscar produtos da empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    res.status(500).json({ erro: "Erro no servidor ao buscar lista" });
   }
 });
 
