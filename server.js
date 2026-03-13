@@ -134,7 +134,7 @@ app.get("/empresas", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// ✅ ROTA CORRIGIDA - POST /empresas
+// ✅ ROTA DEFINITIVA - POST /empresas (Sincronizada com Neon)
 // ========================================
 app.post("/empresas", async (req, res) => {
   try {
@@ -148,35 +148,53 @@ app.post("/empresas", async (req, res) => {
       meta_mensal
     } = req.body;
 
-    // Sanitização básica
+    // 1. Sanitização dos dados (Engenharia de Dados)
     const nomeSanitizado = nome?.trim();
+    // Mantemos apenas números no CNPJ para o banco
     const cnpjSanitizado = cnpj?.replace(/[^\d]/g, '');
 
-    // ✅ CONVERSÃO SEGURA DOS NÚMEROS
-    const turnosInt = turnos ? parseInt(turnos) : 0;
-    const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes) : 0;
+    // 2. Conversão de Tipos (Batendo com seu log do Neon: integer e numeric)
+    const turnosInt = turnos ? parseInt(turnos, 10) : 0;
+    const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes, 10) : 0;
     const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
 
-    const result = await pool.query(
-      `INSERT INTO empresa
-      (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
-      RETURNING *`,
-      [
-        nomeSanitizado,
-        cnpjSanitizado,
-        segmento,
-        regime_tributario,
-        turnosInt,      // ← AGORA É NÚMERO
-        diasInt,        // ← AGORA É NÚMERO
-        metaFloat       // ← AGORA É NÚMERO
-      ]
-    );
+    // 3. Query com nomes de colunas IDÊNTICOS ao seu log do Neon
+    const query = `
+      INSERT INTO empresas 
+      (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7) 
+      RETURNING *;
+    `;
 
+    const values = [
+      nomeSanitizado,
+      cnpjSanitizado,
+      segmento,
+      regime_tributario,
+      turnosInt,
+      diasInt,
+      metaFloat
+    ];
+
+    const result = await pool.query(query, values);
+
+    // 4. Feedback no Terminal e Resposta
+    console.log(`✅ Sucesso: Empresa ${nomeSanitizado} registrada.`);
     res.status(201).json(result.rows[0]);
+
   } catch (error) {
-    console.error("Erro ao criar empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ ERRO CRÍTICO NO POST /EMPRESAS:");
+    console.error("Mensagem:", error.message);
+    
+    // Tratamento específico para o erro que você teve
+    if (error.code === '42703') {
+        console.error("Dica: Verifique se não há erro de digitação nos nomes das colunas.");
+    }
+
+    res.status(500).json({ 
+      erro: "Falha ao salvar no banco de dados", 
+      detalhes: error.message 
+    });
   }
 });
 
