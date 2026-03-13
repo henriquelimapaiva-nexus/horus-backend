@@ -134,7 +134,7 @@ app.get("/empresas", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// ✅ ROTA DEFINITIVA - POST /empresas (Sincronizada com Neon)
+// ✅ ROTA POST /empresas - VERSÃO FINAL
 // ========================================
 app.post("/empresas", async (req, res) => {
   try {
@@ -148,17 +148,14 @@ app.post("/empresas", async (req, res) => {
       meta_mensal
     } = req.body;
 
-    // 1. Sanitização dos dados (Engenharia de Dados)
+    // Sanitização e Conversão de Tipos
     const nomeSanitizado = nome?.trim();
-    // Mantemos apenas números no CNPJ para o banco
     const cnpjSanitizado = cnpj?.replace(/[^\d]/g, '');
-
-    // 2. Conversão de Tipos (Batendo com seu log do Neon: integer e numeric)
     const turnosInt = turnos ? parseInt(turnos, 10) : 0;
     const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes, 10) : 0;
     const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
 
-    // 3. Query com nomes de colunas IDÊNTICOS ao seu log do Neon
+    // Query ajustada para a tabela 'empresas' (plural)
     const query = `
       INSERT INTO empresas 
       (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal) 
@@ -178,19 +175,11 @@ app.post("/empresas", async (req, res) => {
 
     const result = await pool.query(query, values);
 
-    // 4. Feedback no Terminal e Resposta
-    console.log(`✅ Sucesso: Empresa ${nomeSanitizado} registrada.`);
+    console.log(`✅ Empresa registrada: ${nomeSanitizado}`);
     res.status(201).json(result.rows[0]);
 
   } catch (error) {
-    console.error("❌ ERRO CRÍTICO NO POST /EMPRESAS:");
-    console.error("Mensagem:", error.message);
-    
-    // Tratamento específico para o erro que você teve
-    if (error.code === '42703') {
-        console.error("Dica: Verifique se não há erro de digitação nos nomes das colunas.");
-    }
-
+    console.error("❌ Erro no POST /empresas:", error.message);
     res.status(500).json({ 
       erro: "Falha ao salvar no banco de dados", 
       detalhes: error.message 
