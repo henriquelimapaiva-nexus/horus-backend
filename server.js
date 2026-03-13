@@ -3259,13 +3259,17 @@ app.put("/empresas/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🗑️ EXCLUIR EMPRESA
+// 🗑️ EXCLUIR EMPRESA (CORRIGIDO)
 // ========================================
 app.delete("/empresas/:id", autenticarToken, async (req, res) => {
   try {
     const { id } = req.params;
     
-    const result = await pool.query("DELETE FROM empresa WHERE id = $1 RETURNING *", [id]);
+    // ✅ Alterado para 'empresas' (plural)
+    const result = await pool.query(
+      "DELETE FROM empresas WHERE id = $1 RETURNING *", 
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ erro: "Empresa não encontrada" });
@@ -3274,7 +3278,15 @@ app.delete("/empresas/:id", autenticarToken, async (req, res) => {
     res.json({ mensagem: "Empresa excluída com sucesso" });
   } catch (error) {
     console.error("Erro ao excluir empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+
+    // Tratamento para restrição de chave estrangeira (FK)
+    if (error.code === '23503') {
+      return res.status(400).json({ 
+        erro: "Não é possível excluir a empresa: existem funcionários, linhas ou outros registros vinculados a ela." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro interno no servidor ao excluir empresa" });
   }
 });
 
