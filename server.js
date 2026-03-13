@@ -133,6 +133,9 @@ app.get("/empresas", autenticarToken, async (req, res) => {
   }
 });
 
+// ========================================
+// ✅ ROTA CORRIGIDA - POST /empresas
+// ========================================
 app.post("/empresas", async (req, res) => {
   try {
     const {
@@ -149,6 +152,11 @@ app.post("/empresas", async (req, res) => {
     const nomeSanitizado = nome?.trim();
     const cnpjSanitizado = cnpj?.replace(/[^\d]/g, '');
 
+    // ✅ CONVERSÃO SEGURA DOS NÚMEROS
+    const turnosInt = turnos ? parseInt(turnos) : 0;
+    const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes) : 0;
+    const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
+
     const result = await pool.query(
       `INSERT INTO empresa
       (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal)
@@ -159,9 +167,9 @@ app.post("/empresas", async (req, res) => {
         cnpjSanitizado,
         segmento,
         regime_tributario,
-        turnos,
-        dias_produtivos_mes,
-        meta_mensal
+        turnosInt,      // ← AGORA É NÚMERO
+        diasInt,        // ← AGORA É NÚMERO
+        metaFloat       // ← AGORA É NÚMERO
       ]
     );
 
@@ -1662,20 +1670,26 @@ app.get("/produtos/:id", autenticarToken, async (req, res) => {
   }
 });
 
-// Criar novo produto (COM VALOR UNITÁRIO)
+// Criar novo produto (CORRIGIDO: AGORA SALVA A EMPRESA)
 app.post("/produtos", autenticarToken, async (req, res) => {
   try {
-    const { nome, valor_unitario } = req.body;
+    // 1. Pegamos o empresa_id que vem do frontend
+    const { nome, valor_unitario, empresa_id } = req.body;
 
     if (!nome) {
       return res.status(400).json({ erro: "Nome do produto é obrigatório" });
     }
+    
+    if (!empresa_id) {
+      return res.status(400).json({ erro: "ID da empresa é obrigatório para o vínculo" });
+    }
 
+    // 2. Ajustamos para a tabela "produtos" (plural) e incluímos empresa_id
     const result = await pool.query(
-      `INSERT INTO produto (nome, valor_unitario)
-       VALUES ($1, $2)
+      `INSERT INTO produtos (nome, valor_unitario, empresa_id)
+       VALUES ($1, $2, $3)
        RETURNING *`,
-      [nome, valor_unitario || 0]
+      [nome, valor_unitario || 0, empresa_id]
     );
 
     res.status(201).json(result.rows[0]);
