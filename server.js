@@ -3242,7 +3242,7 @@ app.get("/checklist/criar-teste", async (req, res) => {
 });
 
 // ========================================
-// ✏️ ATUALIZAR EMPRESA
+// ✏️ ATUALIZAR EMPRESA (VERSÃO FINAL)
 // ========================================
 app.put("/empresas/:id", autenticarToken, async (req, res) => {
   try {
@@ -3257,8 +3257,16 @@ app.put("/empresas/:id", autenticarToken, async (req, res) => {
       meta_mensal
     } = req.body;
 
-    const result = await pool.query(
-      `UPDATE empresa SET
+    // Sanitização e Conversão de Tipos (Padrão de Segurança)
+    const nomeSanitizado = nome?.trim();
+    const cnpjSanitizado = cnpj?.replace(/[^\d]/g, '');
+    const turnosInt = turnos ? parseInt(turnos, 10) : 0;
+    const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes, 10) : 0;
+    const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
+
+    // Query corrigida para PLURAL 'empresas'
+    const query = `
+      UPDATE empresas SET
         nome = COALESCE($1, nome),
         cnpj = COALESCE($2, cnpj),
         segmento = COALESCE($3, segmento),
@@ -3267,18 +3275,35 @@ app.put("/empresas/:id", autenticarToken, async (req, res) => {
         dias_produtivos_mes = COALESCE($6, dias_produtivos_mes),
         meta_mensal = COALESCE($7, meta_mensal)
       WHERE id = $8
-      RETURNING *`,
-      [nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal, id]
-    );
+      RETURNING *;
+    `;
+
+    const values = [
+      nomeSanitizado,
+      cnpjSanitizado,
+      segmento,
+      regime_tributario,
+      turnosInt,
+      diasInt,
+      metaFloat,
+      id
+    ];
+
+    const result = await pool.query(query, values);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ erro: "Empresa não encontrada" });
     }
 
+    console.log(`✅ Edição salva: ${nomeSanitizado}`);
     res.json(result.rows[0]);
+
   } catch (error) {
-    console.error("Erro ao atualizar empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao atualizar empresa:", error.message);
+    res.status(500).json({ 
+      erro: "Erro interno ao atualizar empresa", 
+      detalhe: error.message 
+    });
   }
 });
 
