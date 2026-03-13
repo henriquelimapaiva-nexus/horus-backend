@@ -125,7 +125,7 @@ app.get("/", (req, res) => {
 
 app.get("/empresas", autenticarToken, async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM empresa ORDER BY id DESC");
+    const result = await pool.query("SELECT * FROM empresas ORDER BY created_at DESC");
     res.json(result.rows);
   } catch (error) {
     console.error("Erro ao buscar empresas:", error);
@@ -3078,14 +3078,14 @@ app.get("/checklist/criar-teste", async (req, res) => {
   try {
     // 1. Buscar empresa (prioridade para "Empresa Teste")
     let empresa = await pool.query(
-      `SELECT id, nome FROM empresa 
+      `SELECT id, nome FROM empresas 
        WHERE nome ILIKE '%teste%' 
        LIMIT 1`
     );
     
     // Se não encontrar, pega a primeira empresa
     if (empresa.rows.length === 0) {
-      empresa = await pool.query("SELECT id, nome FROM empresa LIMIT 1");
+      empresa = await pool.query("SELECT id, nome FROM empresas LIMIT 1");
     }
 
     // Se ainda não tiver empresa, erro
