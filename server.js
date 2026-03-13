@@ -78,39 +78,35 @@ function autenticarToken(req, res, next) {
 }
 
 // ========================================
-// 🔌 Conexão PostgreSQL (com suporte a string de conexão)
+// 🔌 Conexão PostgreSQL Estabilizada
 // ========================================
-let pool;
-
-if (process.env.DB_CONNECTION_STRING) {
-  // Usar string de conexão (Neon - produção)
-  console.log('🔌 Conectando via string de conexão (Neon)');
-  pool = new Pool({
-    connectionString: process.env.DB_CONNECTION_STRING,
-    ssl: {
-      rejectUnauthorized: false // Necessário para Neon
+const poolConfig = process.env.DB_CONNECTION_STRING 
+  ? {
+      connectionString: process.env.DB_CONNECTION_STRING,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
     }
-  });
-} else {
-  // Fallback para conexão local (desenvolvimento)
-  console.log('🔌 Conectando via parâmetros locais');
-  pool = new Pool({
-    user: DB_USER,
-    host: DB_HOST,
-    database: DB_NAME,
-    password: DB_PASSWORD,
-    port: 5432,
-  });
-}
+  : {
+      user: DB_USER,
+      host: DB_HOST,
+      database: DB_NAME,
+      password: DB_PASSWORD,
+      port: 5432,
+    };
 
-// Testar conexão
-pool.connect((err) => {
-  if (err) {
-    console.error('❌ Erro ao conectar ao banco:', err);
-  } else {
-    console.log('✅ Conectado ao banco de dados com sucesso!');
-  }
+const pool = new Pool(poolConfig);
+
+// IMPORTANTE: Listener de erro para o processo não morrer
+pool.on('error', (err) => {
+  console.error('❌ Erro inesperado no pool do Postgres:', err.message);
 });
+
+// Teste de conexão sem travar o event loop
+pool.query('SELECT NOW()')
+  .then(() => console.log('✅ Conectado ao banco de dados com sucesso!'))
+  .catch(err => console.error('❌ Erro ao conectar ao banco:', err.message));
 
 // ========================================
 // 🔎 Teste API
