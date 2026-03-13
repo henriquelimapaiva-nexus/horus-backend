@@ -134,8 +134,22 @@ app.get("/empresas", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// ✅ ROTA POST /empresas - VERSÃO FINAL
+// 🏭 BLOCO INTEGRADO: GESTÃO DE EMPRESAS
 // ========================================
+
+// 1️⃣ ROTA: LISTAR EMPRESAS (Faz a lista aparecer embaixo da ficha)
+app.get("/empresas", async (req, res) => {
+  try {
+    // Busca na tabela PLURAL 'empresas'
+    const result = await pool.query("SELECT * FROM empresas ORDER BY created_at DESC");
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro no GET /empresas:", error.message);
+    res.status(500).json({ erro: "Erro ao carregar lista de empresas" });
+  }
+});
+
+// 2️⃣ ROTA: CADASTRAR EMPRESA (O bloco que você validou)
 app.post("/empresas", async (req, res) => {
   try {
     const {
@@ -155,7 +169,6 @@ app.post("/empresas", async (req, res) => {
     const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes, 10) : 0;
     const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
 
-    // Query ajustada para a tabela 'empresas' (plural)
     const query = `
       INSERT INTO empresas 
       (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal) 
@@ -174,16 +187,24 @@ app.post("/empresas", async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
-
-    console.log(`✅ Empresa registrada: ${nomeSanitizado}`);
+    console.log(`✅ Sucesso: Empresa ${nomeSanitizado} registrada.`);
     res.status(201).json(result.rows[0]);
 
   } catch (error) {
     console.error("❌ Erro no POST /empresas:", error.message);
-    res.status(500).json({ 
-      erro: "Falha ao salvar no banco de dados", 
-      detalhes: error.message 
-    });
+    res.status(500).json({ erro: "Falha ao salvar no banco de dados" });
+  }
+});
+
+// 3️⃣ ROTA: EXCLUIR EMPRESA
+app.delete("/empresas/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query("DELETE FROM empresas WHERE id = $1", [id]);
+    res.status(200).json({ mensagem: "Empresa excluída com sucesso" });
+  } catch (error) {
+    console.error("❌ Erro no DELETE /empresas:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir empresa" });
   }
 });
 
