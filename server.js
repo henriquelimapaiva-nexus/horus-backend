@@ -1699,19 +1699,22 @@ app.post("/produtos", autenticarToken, async (req, res) => {
   }
 });
 
-// Atualizar produto
+// Atualizar produto (CORRIGIDO: TABELA NO PLURAL)
 app.put("/produtos/:id", autenticarToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { nome, valor_unitario } = req.body;
 
+    // Convertendo para float para garantir que o banco aceite o decimal
+    const valorNum = valor_unitario !== undefined ? parseFloat(valor_unitario) : null;
+
     const result = await pool.query(
-      `UPDATE produto 
+      `UPDATE produtos 
        SET nome = COALESCE($1, nome), 
            valor_unitario = COALESCE($2, valor_unitario)
        WHERE id = $3
        RETURNING *`,
-      [nome, valor_unitario, id]
+      [nome, valorNum, id]
     );
 
     if (result.rows.length === 0) {
@@ -1721,15 +1724,20 @@ app.put("/produtos/:id", autenticarToken, async (req, res) => {
     res.json(result.rows[0]);
   } catch (error) {
     console.error("Erro ao atualizar produto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    res.status(500).json({ erro: "Erro no servidor ao atualizar" });
   }
 });
 
-// Excluir produto
+// Excluir produto (CORRIGIDO: TABELA NO PLURAL)
 app.delete("/produtos/:id", autenticarToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query("DELETE FROM produto WHERE id = $1 RETURNING *", [id]);
+    
+    // ✅ Alterado de 'produto' para 'produtos'
+    const result = await pool.query(
+      "DELETE FROM produtos WHERE id = $1 RETURNING *", 
+      [id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ erro: "Produto não encontrado" });
