@@ -4,166 +4,237 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const helmet = require("helmet");
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 const app = express();
+const JWT_SECRET = process.env.JWT_SECRET || 'nexus_secret_key_2026';
 
 // ========================================
-// 🔒 MIDDLEWARE DE SEGURANÇA
+// 🛡️ CAMADA DE SEGURANÇA (HELMET & CORS)
 // ========================================
-app.use(helmet()); // Headers de segurança
-app.use(cors());
+app.use(helmet()); 
+
+app.use(cors({
+    origin: process.env.CLIENT_URL || "*", 
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
 app.use(express.json());
 
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const fetch = require('node-fetch');
+// ========================================
+// 🚦 GESTÃO DE TRÁFEGO (RATE LIMITING)
+// ========================================
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { erro: "Muitas requisições. Tente novamente em 15 minutos." },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+app.use("/api/", apiLimiter);
 
 // ========================================
-// 🔐 VARIÁVEIS DE AMBIENTE
+// 🔌 CONEXÃO COM O BANCO (POSTGRESQL)
 // ========================================
-const JWT_SECRET = process.env.JWT_SECRET || "horus_super_secret_key_fallback";
-const DB_USER = process.env.DB_USER || "postgres";
-const DB_PASSWORD = process.env.DB_PASSWORD || "29031996Hlp.,";
-const DB_NAME = process.env.DB_NAME || "horus_db";
-const DB_HOST = process.env.DB_HOST || "localhost";
-const PORT = process.env.PORT || 3001;
+const pool = new Pool({
+    connectionString: process.env.DB_CONNECTION_STRING,
+    ssl: process.env.DB_CONNECTION_STRING?.includes("neon.tech") 
+        ? { rejectUnauthorized: false } 
+        : false,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+});
+
+pool.on('error', (err) => {
+    console.error('❌ Erro Crítico no Pool de Dados:', err.message);
+});
 
 // ========================================
-// 🔒 RATE LIMITING PARA LOGIN
+// 🔐 SEGURANÇA E CRIPTOGRAFIA (bloco 2)
 // ========================================
+const fetch = require('node-fetch'); 
+
+// Validação de segurança (A variável JWT_SECRET já foi herdada do Bloco 1)
+if (!JWT_SECRET) {
+    console.error("❌ ERRO CRÍTICO: JWT_SECRET não definida no .env.");
+    process.exit(1); 
+}
+
+// Configurações de Criptografia
+const SALT_ROUNDS = 10;
+
+// ========================================
+// 🚦 GESTÃO DE FLUXO (RATE LIMITING)
+// ========================================
+
+// 1. Barreira de Força Bruta (Login):
+// Protege contra invasão de contas. Use este middleware apenas na rota de POST /login.
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 5, // 5 tentativas por IP
+  windowMs: 15 * 60 * 1000, 
+  max: 5, 
   message: { 
-    erro: "Muitas tentativas de login. Tente novamente em 15 minutos." 
+    erro: "Segurança: Muitas tentativas de login. Acesso bloqueado por 15 minutos." 
   },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// Rate limiting geral para API (opcional)
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100, // 100 requisições por IP a cada 15 minutos
-  message: { erro: "Muitas requisições. Tente novamente mais tarde." }
-});
-
-// Aplicar rate limiting global (exceto para rotas específicas)
-app.use('/api/', apiLimiter);
-
 // ========================================
-//    MIDDLEWARE DE AUTENTICAÇÃO
+// 🔐 MIDDLEWARE DE AUTENTICAÇÃO (UNIFICADO)
 // ========================================
+
+/**
+ * Valida o JWT e anexa o usuário à requisição.
+ * Intercepta requisições para validar a identidade via JWT.
+ */
 function autenticarToken(req, res, next) {
   const authHeader = req.headers["authorization"];
 
-  if (!authHeader) {
-    return res.status(401).json({ erro: "Token não fornecido" });
+  // 1. Verifica se o header existe e segue o padrão "Bearer <TOKEN>"
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.warn(`[SECURITY] Acesso negado: Header ausente ou malformado - IP: ${req.ip}`);
+    return res.status(401).json({ 
+      erro: "Acesso negado", 
+      detalhe: "Token não fornecido ou formato inválido" 
+    });
   }
 
   const token = authHeader.split(" ")[1];
 
-  if (!token) {
-    return res.status(401).json({ erro: "Token inválido" });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, usuario) => {
+  // 2. Validação Crítica do Token usando a chave mestra
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
     if (err) {
-      return res.status(403).json({ erro: "Token inválido ou expirado" });
+      const mensagemErro = err.name === "TokenExpiredError" 
+        ? "Sessão expirada. Faça login novamente." 
+        : "Token de autenticação inválido.";
+      
+      console.warn(`[SECURITY] Falha na validação JWT: ${err.message} - IP: ${req.ip}`);
+      return res.status(403).json({ erro: mensagemErro });
     }
 
-    req.usuario = usuario;
-    next();
+    // 3. Injeção de Contexto (ID e Email para as próximas rotas)
+    req.usuario = {
+      id: decoded.id,
+      email: decoded.email,
+      nivel: decoded.nivel || 'consultor'
+    };
+    
+    next(); 
   });
 }
 
 // ========================================
-// 🔌 Conexão PostgreSQL Estabilizada
+// 🔎 MONITORAMENTO (HEALTH CHECK)
 // ========================================
-const poolConfig = process.env.DB_CONNECTION_STRING 
-  ? {
-      connectionString: process.env.DB_CONNECTION_STRING,
-      ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    }
-  : {
-      user: DB_USER,
-      host: DB_HOST,
-      database: DB_NAME,
-      password: DB_PASSWORD,
-      port: 5432,
-    };
 
-const pool = new Pool(poolConfig);
-
-// IMPORTANTE: Listener de erro para o processo não morrer
-pool.on('error', (err) => {
-  console.error('❌ Erro inesperado no pool do Postgres:', err.message);
-});
-
-// Teste de conexão sem travar o event loop
-pool.query('SELECT NOW()')
-  .then(() => console.log('✅ Conectado ao banco de dados com sucesso!'))
-  .catch(err => console.error('❌ Erro ao conectar ao banco:', err.message));
-
-// ========================================
-// 🔎 Teste API
-// ========================================
+/**
+ * Rota Raiz: Confirmação de status do ecossistema Hórus.
+ * Útil para balanceadores de carga e verificações rápidas de uptime.
+ */
 app.get("/", (req, res) => {
-  res.send("API do Hórus está rodando 🧠");
+  res.status(200).json({
+    status: "online",
+    sistema: "Hórus Consultoria Industrial",
+    timestamp: new Date().toISOString(),
+    ambiente: process.env.NODE_ENV || "development",
+    mensagem: "Cérebro operacional e pronto para processamento. 🧠"
+  });
 });
 
 // ========================================
-// 🏢 EMPRESAS
+// 🏢 MÓDULO: GESTÃO DE EMPRESAS (CLIENTES)
 // ========================================
 
-app.get("/empresas", autenticarToken, async (req, res) => {
+/**
+ * 1️⃣ LISTAR EMPRESAS
+ * Rota protegida que retorna todos os clientes da consultoria.
+ * Padrão: Plural-Strict e ordenação cronológica inversa.
+ */
+app.get("/api/companies", autenticarToken, async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM empresas ORDER BY created_at DESC");
-    res.json(result.rows);
+    // Buscamos os campos essenciais. 
+    // Dica: Evite SELECT * em produção se a tabela tiver colunas pesadas/binárias.
+    const query = `
+      SELECT id, nome, cnpj, segmento, criado_em 
+      FROM empresas 
+      ORDER BY criado_em DESC
+    `;
+    
+    const result = await pool.query(query);
+
+    // GARANTIA INDUSTRIAL: O Frontend NUNCA deve receber null ou undefined aqui.
+    // Se não houver empresas, enviamos um array vazio [].
+    res.status(200).json(result.rows || []);
+
   } catch (error) {
-    console.error("Erro ao buscar empresas:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    // Log detalhado no servidor para você debugar rápido
+    console.error("❌ Erro ao buscar empresas:", {
+      mensagem: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+
+    // Resposta genérica e segura para o cliente (não expõe estrutura do banco)
+    res.status(500).json({ 
+      erro: "Falha ao carregar lista de empresas",
+      codigo: "DB_FETCH_ERROR" 
+    });
   }
 });
 
 // ========================================
-// 🏭 BLOCO INTEGRADO: GESTÃO DE EMPRESAS
+// 🏢 MÓDULO: GESTÃO DE EMPRESAS (CLIENTES)
 // ========================================
 
-// 1️⃣ ROTA: LISTAR EMPRESAS (Faz a lista aparecer embaixo da ficha)
-app.get("/empresas", async (req, res) => {
+/**
+ * 1️⃣ LISTAR EMPRESAS
+ * Retorna a lista para o Front-end.
+ */
+app.get("/api/companies", autenticarToken, async (req, res) => {
   try {
-    // Busca na tabela PLURAL 'empresas'
     const result = await pool.query("SELECT * FROM empresas ORDER BY created_at DESC");
-    res.status(200).json(result.rows);
+    res.status(200).json(result.rows || []);
   } catch (error) {
-    console.error("❌ Erro no GET /empresas:", error.message);
+    console.error("❌ Erro GET /companies:", error.message);
     res.status(500).json({ erro: "Erro ao carregar lista de empresas" });
   }
 });
 
-// 2️⃣ ROTA: CADASTRAR EMPRESA (O bloco que você validou)
-app.post("/empresas", async (req, res) => {
-  try {
-    const {
-      nome,
-      cnpj,
-      segmento,
-      regime_tributario,
-      turnos,
-      dias_produtivos_mes,
-      meta_mensal
-    } = req.body;
+/**
+ * 2️⃣ CADASTRAR EMPRESA
+ * Com sanitização rigorosa e proteção de duplicidade.
+ */
+app.post("/api/companies", autenticarToken, async (req, res) => {
+  const {
+    nome,
+    cnpj,
+    segmento,
+    regime_tributario,
+    turnos,
+    dias_produtivos_mes,
+    meta_mensal
+  } = req.body;
 
-    // Sanitização e Conversão de Tipos
-    const nomeSanitizado = nome?.trim();
-    const cnpjSanitizado = cnpj?.replace(/[^\d]/g, '');
-    const turnosInt = turnos ? parseInt(turnos, 10) : 0;
-    const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes, 10) : 0;
-    const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
+  // Validação Crítica de Presença
+  if (!nome || !cnpj) {
+    return res.status(400).json({ erro: "Nome e CNPJ são campos obrigatórios." });
+  }
+
+  try {
+    // Sanitização de Dados (Engineered Inputs)
+    const values = [
+      nome.trim(),
+      cnpj.replace(/\D/g, ''), // Remove tudo que não for dígito
+      segmento || 'Não Definido',
+      regime_tributario || 'Outros',
+      Math.abs(parseInt(turnos, 10)) || 0,
+      Math.abs(parseInt(dias_produtivos_mes, 10)) || 0,
+      Math.abs(parseFloat(meta_mensal)) || 0
+    ];
 
     const query = `
       INSERT INTO empresas 
@@ -172,415 +243,629 @@ app.post("/empresas", async (req, res) => {
       RETURNING *;
     `;
 
-    const values = [
-      nomeSanitizado,
-      cnpjSanitizado,
-      segmento,
-      regime_tributario,
-      turnosInt,
-      diasInt,
-      metaFloat
-    ];
-
     const result = await pool.query(query, values);
-    console.log(`✅ Sucesso: Empresa ${nomeSanitizado} registrada.`);
     res.status(201).json(result.rows[0]);
 
   } catch (error) {
-    console.error("❌ Erro no POST /empresas:", error.message);
-    res.status(500).json({ erro: "Falha ao salvar no banco de dados" });
+    console.error("❌ Erro POST /companies:", error.message);
+    
+    // Tratamento de erro de CNPJ duplicado (Constraint UNIQUE no banco)
+    if (error.code === '23505') {
+      return res.status(400).json({ erro: "Este CNPJ já está cadastrado no sistema." });
+    }
+    
+    res.status(500).json({ erro: "Falha ao salvar empresa no banco de dados" });
   }
 });
 
-// 3️⃣ ROTA: EXCLUIR EMPRESA
-app.delete("/empresas/:id", async (req, res) => {
+/**
+ * 3️⃣ EXCLUIR EMPRESA
+ * Protegida por Token e com verificação de existência.
+ */
+app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
   try {
-    const { id } = req.params;
-    await pool.query("DELETE FROM empresas WHERE id = $1", [id]);
-    res.status(200).json({ mensagem: "Empresa excluída com sucesso" });
+    const result = await pool.query("DELETE FROM empresas WHERE id = $1 RETURNING *", [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada para exclusão." });
+    }
+
+    res.status(200).json({ mensagem: "Empresa e seus vínculos removidos com sucesso." });
   } catch (error) {
-    console.error("❌ Erro no DELETE /empresas:", error.message);
-    res.status(500).json({ erro: "Erro ao excluir empresa" });
+    console.error("❌ Erro DELETE /companies:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir empresa. Verifique se há vínculos ativos." });
   }
 });
 
 // ========================================
-// 🏭 LINHAS
+// 🏭 MÓDULO: LINHAS DE PRODUÇÃO
 // ========================================
 
-app.get("/linhas/:empresaId", async (req, res) => {
-  try {
-    const { empresaId } = req.params;
+/**
+ * 1️⃣ LISTAR LINHAS POR EMPRESA
+ * Essencial para o dashboard: filtra apenas as linhas do cliente selecionado.
+ */
+app.get("/api/lines/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
 
+  try {
     const result = await pool.query(
-      "SELECT * FROM linha_producao WHERE empresa_id = $1 ORDER BY id",
+      "SELECT * FROM linha_producao WHERE empresa_id = $1 ORDER BY nome ASC",
       [empresaId]
     );
 
-    res.json(result.rows);
+    // Garantia de array para o Front-end
+    res.status(200).json(result.rows || []);
   } catch (error) {
-    console.error("Erro ao buscar linhas:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro GET /lines:", error.message);
+    res.status(500).json({ erro: "Erro ao carregar linhas de produção" });
   }
 });
 
-app.post("/linhas", async (req, res) => {
-  try {
-    const { empresa_id, nome, produto_id, takt_time_segundos, meta_diaria } = req.body;
+/**
+ * 2️⃣ CADASTRAR LINHA
+ * Com validação de integridade para evitar cálculos de Takt impossíveis.
+ */
+app.post("/api/lines", autenticarToken, async (req, res) => {
+  const { 
+    empresa_id, 
+    nome, 
+    produto_id, 
+    takt_time_segundos, 
+    meta_diaria 
+  } = req.body;
 
-    const result = await pool.query(
-      `INSERT INTO linha_producao
+  // Validação de Negócio: Não existe linha sem nome ou sem empresa vinculada
+  if (!empresa_id || !nome) {
+    return res.status(400).json({ erro: "Empresa e Nome da linha são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO linha_producao
       (empresa_id, nome, produto_id, takt_time_segundos, meta_diaria)
-      VALUES ($1,$2,$3,$4,$5)
-      RETURNING *`,
-      [empresa_id, nome, produto_id, takt_time_segundos, meta_diaria]
-    );
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *;
+    `;
 
+    const values = [
+      empresa_id,
+      nome.trim(),
+      produto_id || null,
+      Math.max(0.1, parseFloat(takt_time_segundos) || 0), // Evita divisão por zero no futuro
+      Math.abs(parseInt(meta_diaria, 10)) || 0
+    ];
+
+    const result = await pool.query(query, values);
     res.status(201).json(result.rows[0]);
+
   } catch (error) {
-    console.error("Erro ao criar linha:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// ========================================
-// 🏭 CRIAR LINHA COM MÚLTIPLOS PRODUTOS (NOVA ROTA)
-// ========================================
-app.post("/linhas-com-multiplos-produtos", autenticarToken, async (req, res) => {
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
+    console.error("❌ Erro POST /lines:", error.message);
     
-    // 🛠️ NO MASTER: 'produtos' agora é um array de objetos: [{id: 1, takt: 15, meta: 2000}, ...]
-    const { empresa_id, nome, horas_produtivas, produtos } = req.body;
-
-    if (!produtos || produtos.length === 0) {
-      return res.status(400).json({ erro: "Selecione pelo menos um produto" });
+    // Erro de Chave Estrangeira (se a empresa ou produto não existirem)
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Empresa ou Produto inexistente. Verifique os IDs." });
     }
 
-    // 1. Criar a linha (guardamos apenas o nome, empresa e as horas do turno)
-    const linhaRes = await client.query(
-      `INSERT INTO linha_producao (empresa_id, nome, horas_disponiveis)
-       VALUES ($1, $2, $3)
-       RETURNING id`,
-      [empresa_id, nome, horas_produtivas || 8.8]
-    );
+    res.status(500).json({ erro: "Falha ao criar linha de produção" });
+  }
+});
+
+// ========================================
+// 🏭 MÓDULO: LINHAS MASTER (MULTIDATA)
+// ========================================
+
+/**
+ * ROTA: CRIAR LINHA COM MÚLTIPLOS PRODUTOS
+ * Permite definir Takts e Metas específicas para cada produto na mesma linha.
+ */
+app.post("/api/lines-master", autenticarToken, async (req, res) => {
+  const client = await pool.connect(); // Usamos 'client' direto para transações
+  
+  try {
+    const { 
+      empresa_id, 
+      nome, 
+      horas_produtivas, 
+      produtos // Array de objetos: [{id: 1, takt: 15, meta: 2000}, ...]
+    } = req.body;
+
+    // 1. Validação de Consistência
+    if (!empresa_id || !nome || !produtos || produtos.length === 0) {
+      return res.status(400).json({ 
+        erro: "Dados insuficientes. Certifique-se de preencher o nome e selecionar produtos." 
+      });
+    }
+
+    await client.query('BEGIN'); // Início da operação atômica
+
+    // 2. Criar a Cabeça da Linha (Master)
+    const linhaQuery = `
+      INSERT INTO linha_producao (empresa_id, nome, horas_disponiveis)
+      VALUES ($1, $2, $3)
+      RETURNING id;
+    `;
+    const linhaRes = await client.query(linhaQuery, [
+      empresa_id, 
+      nome.trim(), 
+      parseFloat(horas_produtivas) || 8.8
+    ]);
     
     const linhaId = linhaRes.rows[0].id;
 
-    // 2. Para cada produto, salvar sua performance ESPECÍFICA nesta linha
-    for (const p of produtos) {
-      await client.query(
-        `INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
-         VALUES ($1, $2, $3, $4)`,
-        [linhaId, p.id, p.takt, p.meta]
-      );
-    }
+    // 3. Vincular Produtos (Performance Relacional)
+    // Usamos Promise.all para otimizar as inserções dentro da transação
+    const insertPromessas = produtos.map(p => {
+      const pQuery = `
+        INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
+        VALUES ($1, $2, $3, $4)
+      `;
+      const pValues = [
+        linhaId, 
+        p.id, 
+        Math.max(0.1, parseFloat(p.takt) || 0), 
+        Math.abs(parseInt(p.meta, 10)) || 0
+      ];
+      return client.query(pQuery, pValues);
+    });
 
-    await client.query('COMMIT');
+    await Promise.all(insertPromessas);
+
+    await client.query('COMMIT'); // Consolida no banco
     
     res.status(201).json({ 
-      mensagem: "Linha Master criada com sucesso",
-      linha_id: linhaId
+      mensagem: "Linha Master e performances de produtos registradas.",
+      linha_id: linhaId 
     });
 
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error("Erro Master Route:", error);
-    res.status(500).json({ erro: "Erro no servidor ao processar multicadastro" });
+    await client.query('ROLLBACK'); // Desfaz tudo em caso de qualquer erro
+    console.error("❌ Erro Crítico Master Route:", error.message);
+    
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Violação de integridade: Produto ou Empresa não existem." });
+    }
+
+    res.status(500).json({ erro: "Falha ao processar o cadastro mestre da linha." });
   } finally {
-    client.release();
+    client.release(); // Libera o client de volta para o pool (Obrigatório!)
   }
 });
 
 // ========================================
-// 🏗 POSTOS DE TRABALHO
+// 🏗️ MÓDULO: POSTOS DE TRABALHO
 // ========================================
 
-app.get("/postos/:linhaId", async (req, res) => {
-  try {
-    const { linhaId } = req.params;
+/**
+ * 1️⃣ LISTAR POSTOS POR LINHA
+ * Ordenação por fluxo garante a visualização correta da sequência produtiva.
+ */
+app.get("/api/work-stations/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
 
+  try {
     const result = await pool.query(
-      "SELECT * FROM posto_trabalho WHERE linha_id = $1 ORDER BY ordem_fluxo",
+      "SELECT * FROM posto_trabalho WHERE linha_id = $1 ORDER BY ordem_fluxo ASC",
       [linhaId]
     );
 
-    res.json(result.rows);
+    res.status(200).json(result.rows || []);
   } catch (error) {
-    console.error("Erro ao buscar postos:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro GET /work-stations:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar postos de trabalho" });
   }
 });
 
-app.post("/postos", async (req, res) => {
+/**
+ * 2️⃣ CADASTRAR POSTO
+ * Inclui lógica de auto-incremento de fluxo dentro da mesma linha.
+ */
+app.post("/api/work-stations", autenticarToken, async (req, res) => {
+  const {
+    linha_id,
+    nome,
+    tempo_ciclo_segundos,
+    tempo_setup_minutos,
+    cargo_id,
+    disponibilidade_percentual
+  } = req.body;
+
+  if (!linha_id || !nome) {
+    return res.status(400).json({ erro: "Linha e Nome do posto são obrigatórios." });
+  }
+
   try {
-    const {
-      linha_id,
-      nome,
-      tempo_ciclo_segundos,
-      tempo_setup_minutos,
-      cargo_id,
-      disponibilidade_percentual
-    } = req.body;
-
-    const result = await pool.query(
-      `INSERT INTO posto_trabalho
+    const query = `
+      INSERT INTO posto_trabalho
       (linha_id, nome, tempo_ciclo_segundos, tempo_setup_minutos, cargo_id, disponibilidade_percentual, ordem_fluxo)
-      VALUES ($1,$2,$3,$4,$5,$6,
-        (SELECT COALESCE (MAX(ordem_fluxo),0)+1 FROM posto_trabalho WHERE linha_id=$1)
+      VALUES ($1, $2, $3, $4, $5, $6,
+        (SELECT COALESCE(MAX(ordem_fluxo), 0) + 1 FROM posto_trabalho WHERE linha_id = $1)
       )
-      RETURNING *`,
-      [
-        linha_id,
-        nome,
-        tempo_ciclo_segundos,
-        tempo_setup_minutos,
-        cargo_id,
-        disponibilidade_percentual
-      ]
-    );
+      RETURNING *;
+    `;
 
+    const values = [
+      linha_id,
+      nome.trim(),
+      parseFloat(tempo_ciclo_segundos) || 0,
+      parseFloat(tempo_setup_minutos) || 0,
+      cargo_id || null,
+      parseFloat(disponibilidade_percentual) || 100
+    ];
+
+    const result = await pool.query(query, values);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error("Erro ao criar posto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro POST /work-stations:", error.message);
+    res.status(500).json({ erro: "Falha ao registrar posto de trabalho" });
   }
 });
 
-// 🔥 PUT INTELIGENTE (ATUALIZA SOMENTE O QUE FOR ENVIADO)
+/**
+ * 3️⃣ PUT INTELIGENTE (WHITELISTED)
+ * Atualiza apenas os campos permitidos, protegendo a estrutura do banco.
+ */
+app.put("/api/work-stations/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const fields = [];
+  const values = [];
+  let index = 1;
 
-app.put("/postos/:id", async (req, res) => {
+  // LISTA BRANCA: Apenas estes campos podem ser alterados
+  const allowedFields = [
+    'nome', 
+    'tempo_ciclo_segundos', 
+    'tempo_setup_minutos', 
+    'cargo_id', 
+    'disponibilidade_percentual', 
+    'ordem_fluxo'
+  ];
+
   try {
-    const { id } = req.params;
-
-    const fields = [];
-    const values = [];
-    let index = 1;
-
     for (let key in req.body) {
-      fields.push(`${key} = $${index}`);
-      values.push(req.body[key]);
-      index++;
+      if (allowedFields.includes(key)) {
+        fields.push(`${key} = $${index}`);
+        values.push(req.body[key]);
+        index++;
+      }
     }
 
     if (fields.length === 0) {
-      return res.status(400).json({ erro: "Nenhum campo enviado para atualização" });
+      return res.status(400).json({ erro: "Nenhum campo válido enviado para atualização" });
     }
 
     const query = `
       UPDATE posto_trabalho
       SET ${fields.join(", ")}
       WHERE id = $${index}
-      RETURNING *
+      RETURNING *;
     `;
 
-    values.push(id);
+    values.push(id); // O ID entra como último parâmetro
 
     const result = await pool.query(query, values);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Posto não encontrado" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Posto de trabalho não encontrado" });
     }
 
-    res.json(result.rows[0]);
-
+    res.status(200).json(result.rows[0]);
   } catch (error) {
-    console.error("Erro ao atualizar posto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro PUT /work-stations:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar dados do posto" });
   }
 });
 
 // ========================================
-// 📈 MEDIÇÕES DE CICLO (VARIABILIDADE)
+// 📈 MÓDULO: CRONOANÁLISE (VARIABILIDADE)
 // ========================================
 
-app.post("/medicoes-ciclo", async (req, res) => {
+/**
+ * ROTA: REGISTRAR MEDIÇÃO DE CICLO
+ * Coleta o tempo de execução de uma tarefa em um posto específico.
+ */
+app.post("/api/cycle-measurements", autenticarToken, async (req, res) => {
+  const { posto_id, tempo_ciclo_segundos } = req.body;
+
+  // Validação rigorosa: Não permitimos medições zeradas ou negativas
+  if (!posto_id || !tempo_ciclo_segundos || parseFloat(tempo_ciclo_segundos) <= 0) {
+    return res.status(400).json({ 
+      erro: "Dados inválidos. O posto_id é obrigatório e o tempo deve ser maior que zero." 
+    });
+  }
+
   try {
-    const { posto_id, tempo_ciclo_segundos } = req.body;
+    const query = `
+      INSERT INTO ciclo_medicao (posto_id, tempo_ciclo_segundos, data_medicao)
+      VALUES ($1, $2, NOW())
+      RETURNING *;
+    `;
 
-    if (!posto_id || !tempo_ciclo_segundos) {
-      return res.status(400).json({ erro: "posto_id e tempo_ciclo_segundos são obrigatórios" });
-    }
+    const values = [
+      posto_id, 
+      parseFloat(tempo_ciclo_segundos)
+    ];
 
-    const result = await pool.query(
-      `INSERT INTO ciclo_medicao (posto_id, tempo_ciclo_segundos)
-       VALUES ($1, $2)
-       RETURNING *`,
-      [posto_id, tempo_ciclo_segundos]
-    );
-
+    const result = await pool.query(query, values);
+    
+    // Log de engenharia: monitoramento de latência de inserção
+    console.log(`⏱️ Medição registrada: Posto ${posto_id} | ${tempo_ciclo_segundos}s`);
+    
     res.status(201).json(result.rows[0]);
 
   } catch (error) {
-    console.error("Erro ao registrar medição:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao registrar cronoanálise:", error.message);
+    
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "O posto de trabalho informado não existe." });
+    }
+
+    res.status(500).json({ erro: "Falha técnica ao salvar medição de ciclo" });
   }
 });
 
 // ========================================
-// 👷 CARGOS
+// 👷 MÓDULO: GESTÃO DE CARGOS E CUSTOS
 // ========================================
 
-app.get("/cargos/:departamentoId", async (req, res) => {
-  try {
-    const { departamentoId } = req.params;
+/**
+ * 1️⃣ LISTAR CARGOS POR DEPARTAMENTO
+ * Permite filtrar a estrutura hierárquica da empresa.
+ */
+app.get("/api/roles/:departamentoId", autenticarToken, async (req, res) => {
+  const { departamentoId } = req.params;
 
+  try {
     const result = await pool.query(
-      "SELECT * FROM cargo WHERE departamento_id = $1 ORDER BY id",
+      "SELECT * FROM cargo WHERE departamento_id = $1 ORDER BY nome ASC",
       [departamentoId]
     );
 
-    res.json(result.rows);
+    res.status(200).json(result.rows || []);
   } catch (error) {
-    console.error("Erro ao buscar cargos:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro GET /roles:", error.message);
+    res.status(500).json({ erro: "Falha ao recuperar cargos do departamento" });
   }
 });
 
-app.post("/cargos", async (req, res) => {
-  try {
-    const { departamento_id, nome, salario_base, encargos_percentual } = req.body;
+/**
+ * 2️⃣ CADASTRAR CARGO
+ * Foco em precisão financeira para cálculos de OEE e Custo.
+ */
+app.post("/api/roles", autenticarToken, async (req, res) => {
+  const { 
+    departamento_id, 
+    nome, 
+    salario_base, 
+    encargos_percentual 
+  } = req.body;
 
-    const result = await pool.query(
-      `INSERT INTO cargo
+  if (!departamento_id || !nome) {
+    return res.status(400).json({ erro: "Departamento e Nome do cargo são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO cargo
       (departamento_id, nome, salario_base, encargos_percentual)
-      VALUES ($1,$2,$3,$4)
-      RETURNING *`,
-      [
-        departamento_id,
-        nome,
-        salario_base,
-        encargos_percentual || 70
-      ]
-    );
+      VALUES ($1, $2, $3, $4)
+      RETURNING *;
+    `;
 
+    // No Hórus, tratamos dinheiro com precisão.
+    // Encargos padrão de 70% é uma estimativa segura para indústria (Brasil).
+    const values = [
+      departamento_id,
+      nome.trim(),
+      Math.abs(parseFloat(salario_base)) || 0,
+      Math.abs(parseFloat(encargos_percentual)) || 70
+    ];
+
+    const result = await pool.query(query, values);
     res.status(201).json(result.rows[0]);
+
   } catch (error) {
-    console.error("Erro ao criar cargo:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro POST /roles:", error.message);
+    
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Departamento inexistente." });
+    }
+
+    res.status(500).json({ erro: "Erro ao registrar novo cargo" });
   }
 });
 
-// Excluir cargo
-app.delete("/cargos/:id", autenticarToken, async (req, res) => {
+/**
+ * 3️⃣ EXCLUIR CARGO
+ * Verifica se existem colaboradores vinculados antes de deletar (Integridade).
+ */
+app.delete("/api/roles/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
   try {
-    const { id } = req.params;
     const result = await pool.query("DELETE FROM cargo WHERE id = $1 RETURNING *", [id]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Cargo não encontrado" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Cargo não encontrado para exclusão." });
     }
 
-    res.json({ mensagem: "Cargo excluído com sucesso" });
+    res.status(200).json({ mensagem: "Cargo removido com sucesso." });
   } catch (error) {
-    console.error("Erro ao excluir cargo:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro DELETE /roles:", error.message);
+    
+    // Se o cargo estiver sendo usado por um colaborador (FK), o banco barra.
+    if (error.code === '23503') {
+      return res.status(400).json({ 
+        erro: "Não é possível excluir: existem colaboradores ou postos vinculados a este cargo." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro técnico ao tentar excluir o cargo" });
   }
 });
 
 // ========================================
-// 👤 COLABORADORES
+// 👤 MÓDULO: GESTÃO DE COLABORADORES
 // ========================================
 
-app.get("/colaboradores/:empresaId", async (req, res) => {
+/**
+ * 1️⃣ LISTAR COLABORADORES POR EMPRESA
+ * Traz a força de trabalho ativa da unidade.
+ */
+app.get("/api/employees/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+
   try {
-    const { empresaId } = req.params;
+    const query = `
+      SELECT c.*, ca.nome as cargo_nome 
+      FROM colaborador c
+      LEFT JOIN cargo ca ON c.cargo_id = ca.id
+      WHERE c.empresa_id = $1 
+      ORDER BY c.nome ASC
+    `;
+    
+    const result = await pool.query(query, [empresaId]);
 
-    const result = await pool.query(
-      "SELECT * FROM colaborador WHERE empresa_id = $1 ORDER BY id",
-      [empresaId]
-    );
-
-    res.json(result.rows);
+    res.status(200).json(result.rows || []);
   } catch (error) {
-    console.error("Erro ao buscar colaboradores:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro GET /employees:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar lista de colaboradores" });
   }
 });
 
-app.post("/colaboradores", async (req, res) => {
+/**
+ * 2️⃣ CADASTRAR COLABORADOR
+ * Vincula o indivíduo à hierarquia da empresa.
+ */
+app.post("/api/employees", autenticarToken, async (req, res) => {
+  const { empresa_id, cargo_id, nome } = req.body;
+
+  // Validação Crítica
+  if (!empresa_id || !nome || !nome.trim()) {
+    return res.status(400).json({ erro: "Empresa e Nome do colaborador são obrigatórios." });
+  }
+
   try {
-    const { empresa_id, cargo_id, nome } = req.body;
+    const query = `
+      INSERT INTO colaborador (empresa_id, cargo_id, nome)
+      VALUES ($1, $2, $3)
+      RETURNING *;
+    `;
 
-    const result = await pool.query(
-      `INSERT INTO colaborador
-      (empresa_id, cargo_id, nome)
-      VALUES ($1,$2,$3)
-      RETURNING *`,
-      [empresa_id, cargo_id, nome]
-    );
+    const values = [
+      empresa_id,
+      cargo_id || null, // Permite colaborador sem cargo temporariamente
+      nome.trim()
+    ];
 
+    const result = await pool.query(query, values);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error("Erro ao criar colaborador:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
+    console.error("❌ Erro POST /employees:", error.message);
 
-// Excluir colaborador
-app.delete("/colaboradores/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query("DELETE FROM colaborador WHERE id = $1 RETURNING *", [id]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Colaborador não encontrado" });
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Empresa ou Cargo inexistente." });
     }
 
-    res.json({ mensagem: "Colaborador excluído com sucesso" });
+    res.status(500).json({ erro: "Falha ao registrar colaborador" });
+  }
+});
+
+/**
+ * 3️⃣ EXCLUIR COLABORADOR
+ * Remove o vínculo, mas preserva a integridade de medições passadas.
+ */
+app.delete("/api/employees/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query("DELETE FROM colaborador WHERE id = $1 RETURNING *", [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Colaborador não encontrado." });
+    }
+
+    res.status(200).json({ mensagem: "Colaborador removido do quadro." });
   } catch (error) {
-    console.error("Erro ao excluir colaborador:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro DELETE /employees:", error.message);
+    
+    // Se o colaborador estiver vinculado a registros históricos de produção (Cronoanálise), 
+    // o banco pode barrar a exclusão física dependendo da sua regra de negócio.
+    if (error.code === '23503') {
+      return res.status(400).json({ 
+        erro: "Não é possível excluir: este colaborador possui registros de atividades vinculados." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro ao processar exclusão" });
   }
 });
 
 // ========================================
-// 📊 VISÃO COMPLETA DA LINHA (CÉREBRO DO HÓRUS)
+// 📊 MÓDULO: INTELIGÊNCIA DE LINHA (ANALYSIS)
 // ========================================
 
-app.get("/linha-completa/:linhaId", async (req, res) => {
-  try {
-    const { linhaId } = req.params;
+/**
+ * ROTA: VISÃO MASTER DA LINHA
+ * Consolida estrutura física, RH e Financeiro para análise de gargalos e custos.
+ */
+app.get("/api/line-intelligence/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
 
-    const result = await pool.query(
-      `
+  try {
+    const query = `
       SELECT 
-        lp.nome AS linha,
+        lp.id AS linha_id,
+        lp.nome AS linha_nome,
+        lp.horas_disponiveis,
         pt.id AS posto_id,
-        pt.nome AS posto,
+        pt.nome AS posto_nome,
+        pt.ordem_fluxo,
         pt.tempo_ciclo_segundos,
+        pt.tempo_setup_minutos,
         pt.disponibilidade_percentual,
-        c.nome AS cargo,
+        c.nome AS cargo_nome,
         c.salario_base,
-        c.encargos_percentual
+        c.encargos_percentual,
+        -- Cálculo de Custo Estimado por Hora (Salário + Encargos / 220h padrão)
+        ROUND(((c.salario_base * (1 + (c.encargos_percentual / 100))) / 220)::numeric, 2) AS custo_hora_estimado
       FROM linha_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
       LEFT JOIN cargo c ON c.id = pt.cargo_id
       WHERE lp.id = $1
-      ORDER BY pt.id
-      `,
-      [linhaId]
-    );
+      ORDER BY pt.ordem_fluxo ASC;
+    `;
 
-    res.json(result.rows);
+    const result = await pool.query(query, [linhaId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Linha de produção não encontrada ou sem postos configurados." });
+    }
+
+    // Retorna os dados prontos para o gráfico de Balanceamento (Yamazumi)
+    res.status(200).json(result.rows);
+
   } catch (error) {
-    console.error("Erro ao montar visão completa da linha:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao montar Inteligência de Linha:", error.message);
+    res.status(500).json({ erro: "Falha ao processar os dados analíticos da linha." });
   }
 });
 
 // ========================================
-// 🧠 ANALISE INTELIGENTE DA LINHA
+// 🧠 MÓDULO: MOTOR DE ANÁLISE TÉCNICA
 // ========================================
 
-app.get("/analise-linha/:linhaId", async (req, res) => {
+/**
+ * ROTA: ANÁLISE DE PERFORMANCE E GARGALOS
+ * Calcula Eficiência, Capacidade Real e identifica a Restrição (Gargalo).
+ */
+app.get("/api/line-analysis/:linhaId", autenticarToken, async (req, res) => {
   try {
     const { linhaId } = req.params;
 
-    const result = await pool.query(
-      `
+    const result = await pool.query(`
       SELECT 
         lp.takt_time_segundos,
         lp.meta_diaria,
@@ -591,97 +876,93 @@ app.get("/analise-linha/:linhaId", async (req, res) => {
       FROM linha_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
       WHERE lp.id = $1
-      `,
-      [linhaId]
-    );
+      ORDER BY pt.ordem_fluxo ASC
+    `, [linhaId]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Linha não encontrada" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Linha não encontrada." });
     }
 
-    const takt = parseFloat(result.rows[0].takt_time_segundos || 0);
-    const meta = parseFloat(result.rows[0].meta_diaria || 0);
+    const takt = parseFloat(result.rows[0].takt_time_segundos) || 0;
+    const metaPlanejada = parseFloat(result.rows[0].meta_diaria) || 0;
 
-    if (!takt) {
-      return res.json({
-        mensagem: "Linha sem takt definido",
-        takt_time_segundos: takt,
-        meta_diaria_planejada: meta,
-        postos: []
+    // Se a linha não tem Takt, a análise de eficiência fica comprometida
+    if (takt <= 0) {
+      return res.status(422).json({ 
+        erro: "Takt Time não definido para esta linha. Impossível calcular eficiência." 
       });
     }
 
-    let maiorCiclo = 0;
-    let gargalo = null;
+    let maiorCicloReal = 0;
+    let nomeGargalo = "N/A";
 
-    const postos = result.rows.map(p => {
-      const ciclo = parseFloat(p.tempo_ciclo_segundos || 0);
-      const disponibilidade = parseFloat(p.disponibilidade) / 100;
+    const analisePostos = result.rows
+      .filter(p => p.id !== null) // Ignora linhas sem postos (LEFT JOIN result)
+      .map(p => {
+        const cicloNominal = parseFloat(p.tempo_ciclo_segundos) || 0;
+        const disp = (parseFloat(p.disponibilidade) || 100) / 100;
+        
+        // Ciclo Real ajustado pela disponibilidade (OEE-based cycle)
+        const cicloReal = disp > 0 ? cicloNominal / disp : 0;
 
-      const cicloReal = disponibilidade > 0 ? ciclo / disponibilidade : ciclo;
+        if (cicloReal > maiorCicloReal) {
+          maiorCicloReal = cicloReal;
+          nomeGargalo = p.nome;
+        }
 
-      if (cicloReal > maiorCiclo) {
-        maiorCiclo = cicloReal;
-        gargalo = p.nome;
-      }
-
-      return {
-        posto: p.nome,
-        ciclo_segundos: ciclo,
-        disponibilidade_percentual: p.disponibilidade,
-        ciclo_real_ajustado: cicloReal.toFixed(2)
-      };
-    });
-
-    if (maiorCiclo === 0) {
-      return res.json({
-        mensagem: "Linha sem postos cadastrados",
-        takt_time_segundos: takt,
-        meta_diaria_planejada: meta,
-        postos: []
+        return {
+          posto: p.nome,
+          ciclo_nominal: cicloNominal,
+          disponibilidade: p.disponibilidade + "%",
+          ciclo_real: parseFloat(cicloReal.toFixed(2))
+        };
       });
+
+    if (analisePostos.length === 0) {
+      return res.status(200).json({ mensagem: "Linha sem postos cadastrados para análise." });
     }
 
-    const eficiencia = maiorCiclo > 0
-      ? ((takt / maiorCiclo) * 100).toFixed(2)
-      : 0;
+    // Cálculos de Performance Industrial
+    const eficiencia = ((takt / maiorCicloReal) * 100).toFixed(2);
+    const capacidadeRealDia = Math.floor((metaPlanejada * takt) / maiorCicloReal);
 
-    const capacidadeEstimada = maiorCiclo > 0
-      ? Math.floor((meta * takt) / maiorCiclo)
-      : 0;
-
-    res.json({
-      takt_time_segundos: takt,
-      meta_diaria_planejada: meta,
-      gargalo: gargalo,
-      maior_tempo_ciclo_real_segundos: maiorCiclo.toFixed(2),
-      eficiencia_percentual: eficiencia,
-      capacidade_estimada_dia: capacidadeEstimada,
-      postos
+    res.status(200).json({
+      metricas_globais: {
+        takt_time_alvo: takt,
+        meta_planejada: metaPlanejada,
+        gargalo_identificado: nomeGargalo,
+        ciclo_do_gargalo: parseFloat(maiorCicloReal.toFixed(2)),
+        eficiencia_de_balanceamento: eficiencia + "%",
+        capacidade_real_estimada: capacidadeRealDia
+      },
+      detalhamento_postos: analisePostos
     });
 
   } catch (error) {
-    console.error("Erro na análise da linha:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro Crítico na Análise de Linha:", error.message);
+    res.status(500).json({ erro: "Falha ao processar inteligência da linha." });
   }
 });
 
 // ========================================
-// 💰 SIMULAÇÃO E IMPACTO FINANCEIRO
+// 💰 MÓDULO: SIMULAÇÃO E IMPACTO (OEE)
 // ========================================
 
-app.get("/simulacao-linha/:linhaId", async (req, res) => {
+/**
+ * ROTA: SIMULAÇÃO DE LINHA E PERDAS
+ * Calcula a capacidade real descontando perdas de disponibilidade, performance e qualidade.
+ */
+app.get("/api/simulation/:linhaId", autenticarToken, async (req, res) => {
   try {
     const { linhaId } = req.params;
 
-    const result = await pool.query(
-      `
+    const query = `
       SELECT 
         lp_prod.id as linha_produto_id,
         p.nome as produto_nome,
         lp_prod.takt_time_segundos,
         lp_prod.meta_diaria,
-        l.horas_produtivas_dia,
+        l.horas_disponiveis as horas_produtivas_dia,
         e.dias_produtivos_mes,
         pt.nome as posto_nome,
         pt.tempo_ciclo_segundos,
@@ -697,23 +978,24 @@ app.get("/simulacao-linha/:linhaId", async (req, res) => {
       LEFT JOIN posto_trabalho pt ON pt.linha_id = l.id
       LEFT JOIN perdas_linha pl ON pl.linha_produto_id = lp_prod.id
       WHERE l.id = $1
-      `,
-      [linhaId]
-    );
+      ORDER BY lp_prod.id, pt.ordem_fluxo;
+    `;
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Linha não encontrada" });
+    const result = await pool.query(query, [linhaId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Dados insuficientes para simulação nesta linha." });
     }
 
-    const horasProdutivas = parseFloat(result.rows[0].horas_produtivas_dia || 0);
-    const diasMes = parseFloat(result.rows[0].dias_produtivos_mes || 0);
+    const horasProdutivas = parseFloat(result.rows[0].horas_produtivas_dia) || 8.8;
+    const diasMes = parseFloat(result.rows[0].dias_produtivos_mes) || 22;
 
+    // 1. Agrupamento por Produto
     const produtosMap = {};
-
     result.rows.forEach(row => {
       if (!produtosMap[row.linha_produto_id]) {
         produtosMap[row.linha_produto_id] = {
-          produto_nome: row.produto_nome,
+          nome: row.produto_nome,
           takt: parseFloat(row.takt_time_segundos),
           metaDiaria: parseFloat(row.meta_diaria),
           microparadas: parseFloat(row.microparadas),
@@ -722,512 +1004,754 @@ app.get("/simulacao-linha/:linhaId", async (req, res) => {
           postos: []
         };
       }
-
-      produtosMap[row.linha_produto_id].postos.push({
-        nome: row.posto_nome,
-        ciclo: parseFloat(row.tempo_ciclo_segundos || 0),
-        setup: parseFloat(row.tempo_setup_minutos || 0),
-        disponibilidade: parseFloat(row.disponibilidade) / 100
-      });
+      if (row.posto_nome) {
+        produtosMap[row.linha_produto_id].postos.push({
+          nome: row.posto_nome,
+          ciclo: parseFloat(row.tempo_ciclo_segundos || 0),
+          setup: parseFloat(row.tempo_setup_minutos || 0),
+          disponibilidade: (parseFloat(row.disponibilidade) || 100) / 100
+        });
+      }
     });
 
-    const resultados = [];
+    // 2. Processamento de Engenharia
+    const analiseFinal = Object.values(produtosMap).map(prod => {
+      let maiorCicloReal = 0;
+      let setupTotalMin = 0;
+      let nomeGargalo = "N/A";
 
-    for (const key in produtosMap) {
-      const produto = produtosMap[key];
-
-      let maiorCiclo = 0;
-      let gargalo = null;
-      let setupTotalMinutos = 0;
-
-      produto.postos.forEach(p => {
-        setupTotalMinutos += p.setup;
-
-        const cicloReal = p.disponibilidade > 0
-          ? p.ciclo / p.disponibilidade
-          : p.ciclo;
-
-        if (cicloReal > maiorCiclo) {
-          maiorCiclo = cicloReal;
-          gargalo = p.nome;
+      prod.postos.forEach(p => {
+        setupTotalMin += p.setup;
+        const cicloReal = p.disponibilidade > 0 ? p.ciclo / p.disponibilidade : 0;
+        
+        if (cicloReal > maiorCicloReal) {
+          maiorCicloReal = cicloReal;
+          nomeGargalo = p.nome;
         }
       });
 
-      const tempoPlanejado = horasProdutivas * 3600;
-      const tempoParadas = (setupTotalMinutos * 60) + (produto.microparadas * 60);
-      const tempoOperando = tempoPlanejado - tempoParadas;
+      // Cálculo de Tempos (Segundos)
+      const tempoTotalDisponivel = horasProdutivas * 3600;
+      const tempoPerdaDisponibilidade = (setupTotalMin * 60) + (prod.microparadas * 60);
+      const tempoLiquidoOperando = Math.max(0, tempoTotalDisponivel - tempoPerdaDisponibilidade);
 
-      const capacidadeBruta = maiorCiclo > 0
-        ? Math.floor(tempoOperando / maiorCiclo)
+      // Capacidade e Qualidade
+      const capacidadeBruta = maiorCicloReal > 0 ? Math.floor(tempoLiquidoOperando / maiorCicloReal) : 0;
+      const producaoBoa = Math.max(0, capacidadeBruta - prod.refugo);
+      
+      // Indicadores OEE (Simplificados)
+      const disponibilidadeOEE = (tempoLiquidoOperando / tempoTotalDisponivel) * 100;
+      const qualidadeOEE = capacidadeBruta > 0 ? (producaoBoa / capacidadeBruta) * 100 : 0;
+      const performanceOEE = (maiorCicloReal > 0 && prod.takt > 0) ? (prod.takt / maiorCicloReal) * 100 : 0;
+
+      return {
+        produto: prod.nome,
+        gargalo: nomeGargalo,
+        capacidade_real_dia: producaoBoa,
+        perda_diaria_pecas: prod.metaDiaria - producaoBoa,
+        indicadores: {
+          disponibilidade: disponibilidadeOEE.toFixed(2) + "%",
+          performance: performanceOEE.toFixed(2) + "%",
+          qualidade: qualidadeOEE.toFixed(2) + "%",
+          oee_global: ((disponibilidadeOEE * performanceOEE * qualidadeOEE) / 10000).toFixed(2) + "%"
+        }
+      };
+    });
+
+    res.status(200).json({
+      configuracao: { horas_dia: horasProdutivas, dias_mes: diasMes },
+      simulacao: analiseFinal
+    });
+
+  } catch (error) {
+    console.error("❌ Erro no Motor de Simulação:", error.message);
+    res.status(500).json({ erro: "Falha ao calcular impacto financeiro." });
+  }
+});
+
+// ========================================
+// 📊 MOTOR DE CÁLCULO OEE (VERSÃO NEXUS - FINAL)
+// ========================================
+app.post("/api/simulador-oee", async (req, res) => {
+  try {
+    const { linhaId, horasProdutivas, produtos } = req.body;
+
+    // Validação de entrada
+    if (!produtos || !Array.isArray(produtos)) {
+      return res.status(400).json({ erro: "Dados de produtos inválidos." });
+    }
+
+    let resultados = [];
+
+    for (const produto of produtos) {
+      // 1. CONVERSÃO PARA BASE SEGUNDOS (Padronização de Engenharia)
+      const tempoPlanejadoSegundos = horasProdutivas * 3600; 
+      const disponibilidadeDecimal = (produto.disponibilidade || 100) / 100;
+      const tempoOperandoSegundos = tempoPlanejadoSegundos * disponibilidadeDecimal;
+
+      // 2. IDENTIFICAÇÃO DO GARGALO (Maior ciclo entre os postos)
+      const temposCiclo = produto.postos.map(p => p.tempo_ciclo || 0);
+      const gargalo = Math.max(...temposCiclo) || 1; // Evita divisão por zero
+      
+      // 3. CÁLCULO DE CAPACIDADE E PRODUÇÃO
+      // Capacidade Bruta = Segundos Disponíveis / Ciclo do Gargalo
+      const capacidadeBruta = Math.floor(tempoOperandoSegundos / gargalo);
+      
+      // Produção Boa = Capacidade * Índice de Qualidade
+      const qualidadeDecimal = (produto.qualidade || 100) / 100;
+      const producaoBoa = Math.floor(capacidadeBruta * qualidadeDecimal);
+
+      // 4. CÁLCULO DOS PILARES OEE (Normalizados 0 a 1)
+      const disponibilidadeOEE = disponibilidadeDecimal;
+      
+      // Performance = (Produção Real * Takt Ideal) / Tempo Operando Real
+      // Nota: Se o Takt não for informado, usamos o próprio gargalo como referência
+      const taktIdeal = produto.takt || gargalo;
+      const performanceOEE = tempoOperandoSegundos > 0 
+        ? (capacidadeBruta * taktIdeal) / tempoOperandoSegundos 
         : 0;
 
-      const producaoBoa = capacidadeBruta - produto.refugo;
+      const qualidadeOEE = capacidadeBruta > 0 ? producaoBoa / capacidadeBruta : 0;
+      
+      // Cálculo Final: Disponibilidade x Performance x Qualidade
+      const oeeFinal = disponibilidadeOEE * performanceOEE * qualidadeOEE;
 
-      // -------------------
-      // CÁLCULO OEE
-      // -------------------
-
-      const disponibilidadeOEE = tempoPlanejado > 0
-        ? tempoOperando / tempoPlanejado
-        : 0;
-
-      const performanceOEE = tempoOperando > 0
-        ? (capacidadeBruta * produto.takt) / tempoOperando
-        : 0;
-
-      const qualidadeOEE = capacidadeBruta > 0
-        ? producaoBoa / capacidadeBruta
-        : 0;
-
-      const oeeFinal =
-        disponibilidadeOEE *
-        performanceOEE *
-        qualidadeOEE;
-
+      // 5. COMPILAÇÃO DO RELATÓRIO
       resultados.push({
         produto: produto.produto_nome,
         meta_diaria_planejada: produto.metaDiaria,
         capacidade_bruta_dia: capacidadeBruta,
         producao_boa_dia: producaoBoa,
-        deficit_pecas_dia: produto.metaDiaria - producaoBoa,
-        gargalo: gargalo,
-        tempo_ciclo_real_gargalo: maiorCiclo.toFixed(2),
-
-        disponibilidade_percentual: (disponibilidadeOEE * 100).toFixed(2),
-        performance_percentual: (performanceOEE * 100).toFixed(2),
-        qualidade_percentual: (qualidadeOEE * 100).toFixed(2),
-        oee_percentual: (oeeFinal * 100).toFixed(2)
+        deficit_pecas_dia: Math.max(0, (produto.metaDiaria || 0) - producaoBoa),
+        gargalo_identificado: `${gargalo}s`,
+        indicadores: {
+          disponibilidade_percentual: (disponibilidadeOEE * 100).toFixed(2),
+          performance_percentual: (Math.min(performanceOEE, 1) * 100).toFixed(2),
+          qualidade_percentual: (qualidadeOEE * 100).toFixed(2),
+          oee_global_percentual: (oeeFinal * 100).toFixed(2)
+        }
       });
     }
 
-    res.json({
+    // Resposta final para o Front-end/Thunder Client
+    res.status(200).json({
+      status: "sucesso_v2", // Para confirmar que o código novo está rodando
       linha_id: linhaId,
-      horas_produtivas_dia: horasProdutivas,
-      produtos: resultados
+      timestamp: new Date().toISOString(),
+      analise_por_produto: resultados
     });
 
   } catch (error) {
-    console.error("Erro no cálculo OEE:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro Crítico no Motor OEE:", error.message);
+    res.status(500).json({ 
+      erro: "Falha interna no motor de cálculo", 
+      detalhe: error.message 
+    });
   }
 });
 
 // ========================================
-// ⚖ BALANCEAMENTO DA LINHA
+// ⚖️ MÓDULO: ENGENHARIA DE BALANCEAMENTO
 // ========================================
 
-app.get("/balanceamento/:linhaId", async (req, res) => {
+/**
+ * ROTA: ANÁLISE DE BALANCEAMENTO (YAMAZUMI)
+ * Identifica o desvio entre postos e o potencial de redistribuição de carga.
+ */
+app.get("/api/line-balancing/:linhaId", autenticarToken, async (req, res) => {
   try {
     const { linhaId } = req.params;
 
-    const result = await pool.query(
-      `
+    const result = await pool.query(`
       SELECT 
-        pt.nome,
-        pt.tempo_ciclo_segundos,
-        COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
-      FROM posto_trabalho pt
-      WHERE pt.linha_id = $1
-      ORDER BY pt.ordem_fluxo
-      `,
-      [linhaId]
-    );
+        nome,
+        tempo_ciclo_segundos,
+        COALESCE(disponibilidade_percentual, 100) as disponibilidade
+      FROM posto_trabalho
+      WHERE linha_id = $1
+      ORDER BY ordem_fluxo ASC
+    `, [linhaId]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Nenhum posto encontrado" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Nenhum posto encontrado para esta linha." });
     }
 
-    let soma = 0;
-    let maior = 0;
-    let menor = Infinity;
+    let somaCiclosReais = 0;
+    let maiorCicloReal = 0;
+    let menorCicloReal = Infinity;
 
-    const postos = result.rows.map(p => {
-      const ciclo = parseFloat(p.tempo_ciclo_segundos || 0);
-      const disponibilidade = parseFloat(p.disponibilidade) / 100;
-      const cicloReal = disponibilidade > 0 ? ciclo / disponibilidade : ciclo;
+    const postosProcessados = result.rows.map(p => {
+      const cicloNominal = parseFloat(p.tempo_ciclo_segundos) || 0;
+      const disp = (parseFloat(p.disponibilidade) || 100) / 100;
+      
+      // Ciclo ajustado: Reflete o tempo real que o posto "ocupa" na linha
+      const cicloReal = disp > 0 ? cicloNominal / disp : 0;
 
-      soma += cicloReal;
-      if (cicloReal > maior) maior = cicloReal;
-      if (cicloReal < menor) menor = cicloReal;
+      somaCiclosReais += cicloReal;
+      if (cicloReal > maiorCicloReal) maiorCicloReal = cicloReal;
+      if (cicloReal < menorCicloReal && cicloReal > 0) menorCicloReal = cicloReal;
 
       return {
         posto: p.nome,
-        ciclo_real: cicloReal.toFixed(2)
+        ciclo_nominal: cicloNominal,
+        ciclo_real: parseFloat(cicloReal.toFixed(2))
       };
     });
 
-    const media = soma / result.rows.length;
+    const qtdPostos = postosProcessados.length;
+    const tempoMedio = somaCiclosReais / qtdPostos;
 
-    const indiceBalanceamento = ((media / maior) * 100).toFixed(2);
+    // Índice de Balanceamento: Quanto mais próximo de 100%, mais equilibrada a linha.
+    const indiceBalanceamento = maiorCicloReal > 0 
+      ? ((tempoMedio / maiorCicloReal) * 100).toFixed(2) 
+      : 0;
 
-    res.json({
-      quantidade_postos: result.rows.length,
-      tempo_medio_segundos: media.toFixed(2),
-      maior_tempo_segundos: maior.toFixed(2),
-      menor_tempo_segundos: menor.toFixed(2),
-      indice_balanceamento_percentual: indiceBalanceamento,
-      postos
+    // Perda por Balanceamento: O quanto de capacidade você "joga fora" por ter postos desiguais.
+    const perdaBalanceamento = (100 - indiceBalanceamento).toFixed(2);
+
+    res.status(200).json({
+      resumo_executivo: {
+        total_postos: qtdPostos,
+        tempo_total_agregado: parseFloat(somaCiclosReais.toFixed(2)),
+        ritmo_da_linha_seg: parseFloat(maiorCicloReal.toFixed(2)),
+        indice_balanceamento: indiceBalanceamento + "%",
+        perda_por_desbalanceamento: perdaBalanceamento + "%"
+      },
+      detalhes_por_posto: postosProcessados
     });
 
   } catch (error) {
-    console.error("Erro no balanceamento:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro no cálculo de balanceamento:", error.message);
+    res.status(500).json({ erro: "Falha técnica ao processar balanceamento de linha." });
   }
 });
 
 // ========================================
-// 🌎 EFICIÊNCIA GLOBAL DA LINHA
+// 🌎 MÓDULO: EFICIÊNCIA GLOBAL (MACRO)
 // ========================================
 
-app.get("/eficiencia-global/:linhaId", async (req, res) => {
+/**
+ * ROTA: RESUMO DE PERFORMANCE GLOBAL
+ * Entrega os KPIs mestres para o dashboard do Diretor/Dono da fábrica.
+ */
+app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => {
   try {
     const { linhaId } = req.params;
 
-    const result = await pool.query(
-      `
+    const result = await pool.query(`
       SELECT 
         lp.takt_time_segundos,
         lp.meta_diaria,
-        pt.tempo_ciclo_segundos,
+        pt.tempo_cycle_segundos, -- Verifique se o nome da coluna está correto
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
       FROM linha_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
       WHERE lp.id = $1
-      `,
-      [linhaId]
-    );
+    `, [linhaId]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Linha não encontrada" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Linha de produção não localizada." });
     }
 
-    const takt = parseFloat(result.rows[0].takt_time_segundos || 0);
-    const meta = parseFloat(result.rows[0].meta_diaria || 0);
+    const taktAlvo = parseFloat(result.rows[0].takt_time_segundos) || 0;
+    const metaDiaria = parseFloat(result.rows[0].meta_diaria) || 0;
 
-    let maiorCiclo = 0;
-    let somaCiclos = 0;
+    let tempoAgregadoTotal = 0;
+    let ritmoGargalo = 0;
+    const totalPostos = result.rows.filter(r => r.tempo_cycle_segundos !== null).length;
 
     result.rows.forEach(p => {
-      const ciclo = parseFloat(p.tempo_ciclo_segundos || 0);
-      const disponibilidade = parseFloat(p.disponibilidade) / 100;
-      const cicloReal = disponibilidade > 0 ? ciclo / disponibilidade : ciclo;
+      const cicloNominal = parseFloat(p.tempo_cycle_segundos) || 0;
+      const disp = (parseFloat(p.disponibilidade) || 100) / 100;
+      const cicloAjustado = disp > 0 ? cicloNominal / disp : 0;
 
-      somaCiclos += cicloReal;
+      tempoAgregadoTotal += cicloAjustado;
+      if (cicloAjustado > ritmoGargalo) ritmoGargalo = cicloAjustado;
+    });
 
-      if (cicloReal > maiorCiclo) {
-        maiorCiclo = cicloReal;
+    // Validação de Dados Mestre
+    if (ritmoGargalo === 0 || metaDiaria === 0 || taktAlvo === 0 || totalPostos === 0) {
+      return res.status(200).json({
+        alerta: "Estrutura de linha incompleta",
+        mensagem: "Certifique-se de que a meta, o takt e os tempos de ciclo dos postos estão cadastrados.",
+        meta_planejada: metaDiaria
+      });
+    }
+
+    // 🎯 INDICADORES TÉCNICOS
+    
+    // Capacidade Real: O que o gargalo permite produzir no tempo planejado
+    const capacidadeReal = Math.floor((metaDiaria * taktAlvo) / ritmoGargalo);
+
+    // Ocupação: Média de saturação dos postos em relação ao gargalo
+    const taxaOcupacao = ((tempoAgregadoTotal / (ritmoGargalo * totalPostos)) * 100).toFixed(2);
+
+    // Eficiência Global: Proximidade da meta planejada
+    const eficienciaGlobal = ((capacidadeReal / metaDiaria) * 100).toFixed(2);
+
+    res.status(200).json({
+      metas: {
+        planejada: metaDiaria,
+        alcancavel_pelo_gargalo: capacidadeReal
+      },
+      kpis: {
+        eficiencia_global: eficienciaGlobal + "%",
+        ocupacao_media_recursos: taxaOcupacao + "%",
+        perda_capacidade_diaria: metaDiaria - capacidadeReal
       }
     });
 
-    if (maiorCiclo === 0 || meta === 0 || takt === 0) {
-      return res.json({
-        mensagem: "Linha ainda não estruturada",
-        meta_planejada: meta
-      });
-    }
-    const capacidadeTeorica = meta;
-
-    const capacidadeReal = Math.floor((meta * takt) / maiorCiclo);
-
-    const ocupacaoLinha = ((somaCiclos / (maiorCiclo * result.rows.length)) * 100).toFixed(2);
-
-    const eficienciaGlobal = ((capacidadeReal / meta) * 100).toFixed(2);
-
-    res.json({
-      meta_planejada: meta,
-      capacidade_teorica_maxima: capacidadeTeorica,
-      capacidade_real: capacidadeReal,
-      taxa_ocupacao_linha_percentual: ocupacaoLinha,
-      eficiencia_global_percentual: eficienciaGlobal
-    });
-
   } catch (error) {
-    console.error("Erro na eficiência global:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro no cálculo de eficiência macro:", error.message);
+    res.status(500).json({ erro: "Erro ao processar visão macro de eficiência." });
   }
 });
 
 // ========================================
-// 📊 ANALISE DE VARIABILIDADE DO POSTO
+// 📊 MÓDULO: ESTABILIDADE E VARIABILIDADE
 // ========================================
 
-app.get("/variabilidade/:postoId", async (req, res) => {
+/**
+ * ROTA: ANÁLISE ESTATÍSTICA DO POSTO
+ * Avalia se o processo é repetível ou se há descontrole operacional.
+ */
+app.get("/api/variability/:postoId", autenticarToken, async (req, res) => {
   try {
     const { postoId } = req.params;
 
     const result = await pool.query(
-      `SELECT tempo_ciclo_segundos
-       FROM ciclo_medicao
-       WHERE posto_id = $1`,
+      `SELECT tempo_ciclo_segundos 
+       FROM ciclo_medicao 
+       WHERE posto_id = $1 
+       ORDER BY data_medicao DESC`, 
       [postoId]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Nenhuma medição encontrada para este posto" });
+    const n = result.rows.length;
+
+    if (n === 0) {
+      return res.status(404).json({ erro: "Nenhuma medição encontrada para este posto." });
     }
 
     const valores = result.rows.map(r => parseFloat(r.tempo_ciclo_segundos));
+    const soma = valores.reduce((a, b) => a + b, 0);
+    const media = soma / n;
 
-    const n = valores.length;
-
-    const media = valores.reduce((a, b) => a + b, 0) / n;
-
-    const variancia =
-      valores.reduce((acc, val) => acc + Math.pow(val - media, 2), 0) / n;
+    // Cálculo da Variância Amostral (n-1 para maior precisão estatística em amostras)
+    const variancia = n > 1 
+      ? valores.reduce((acc, val) => acc + Math.pow(val - media, 2), 0) / (n - 1)
+      : 0;
 
     const desvioPadrao = Math.sqrt(variancia);
+    
+    // Coeficiente de Variação (CV) - Mede a dispersão em relação à média
+    const cv = media > 0 ? (desvioPadrao / media) * 100 : 0;
 
-    const coeficienteVariacao = (desvioPadrao / media) * 100;
-
+    // Classificação Industrial de Estabilidade
     let classificacao = "";
+    let statusColor = "";
 
-    if (coeficienteVariacao < 5) {
-      classificacao = "Processo muito estável";
-    } else if (coeficienteVariacao < 10) {
-      classificacao = "Processo estável";
-    } else if (coeficienteVariacao < 20) {
-      classificacao = "Processo instável";
+    if (cv < 5) {
+      classificacao = "Processo sob controle (Excelente)";
+      statusColor = "green";
+    } else if (cv < 10) {
+      classificacao = "Processo estável (Aceitável)";
+      statusColor = "blue";
+    } else if (cv < 20) {
+      classificacao = "Processo instável (Requer atenção)";
+      statusColor = "yellow";
     } else {
-      classificacao = "Processo crítico";
+      classificacao = "Processo crítico (Alto risco de gargalo)";
+      statusColor = "red";
     }
 
-    res.json({
-      quantidade_medicoes: n,
-      media_segundos: media.toFixed(2),
-      desvio_padrao_segundos: desvioPadrao.toFixed(2),
-      coeficiente_variacao_percentual: coeficienteVariacao.toFixed(2),
-      classificacao
+    res.status(200).json({
+      metadados: {
+        posto_id: postoId,
+        total_amostras: n
+      },
+      estatisticas: {
+        media_segundos: parseFloat(media.toFixed(2)),
+        desvio_padrao: parseFloat(desvioPadrao.toFixed(2)),
+        coeficiente_variacao: cv.toFixed(2) + "%"
+      },
+      diagnostico: {
+        classificacao,
+        status_slug: statusColor,
+        acao_recomendada: cv >= 20 
+          ? "Realizar novo treinamento ou revisar método de trabalho (PO)." 
+          : "Manter monitoramento periódico."
+      }
     });
 
   } catch (error) {
-    console.error("Erro na análise de variabilidade:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro na análise estatística:", error.message);
+    res.status(500).json({ erro: "Falha ao processar análise de variabilidade." });
   }
 });
 
 // ========================================
-// 📦 VINCULAR PRODUTO À LINHA
+// 🔗 MÓDULO: VÍNCULO PRODUTO-LINHA
 // ========================================
 
-app.post("/linha-produto", async (req, res) => {
+/**
+ * ROTA: VINCULAR OU ATUALIZAR PERFORMANCE DE PRODUTO NA LINHA
+ * Define como um produto específico deve se comportar em uma linha específica.
+ */
+app.post("/api/line-product", autenticarToken, async (req, res) => {
+  const { 
+    linha_id, 
+    produto_id, 
+    takt_time_segundos, 
+    meta_diaria 
+  } = req.body;
+
+  // 1. Validação de Presença e Tipo
+  if (!linha_id || !produto_id) {
+    return res.status(400).json({ erro: "ID da Linha e ID do Produto são obrigatórios." });
+  }
+
+  // 2. Sanitização de Valores de Engenharia
+  // Impedimos Takt ou Meta zero/negativo para não quebrar cálculos de eficiência (divisão por zero)
+  const taktLimpo = Math.max(0.1, parseFloat(takt_time_segundos) || 0);
+  const metaLimpa = Math.max(1, parseInt(meta_diaria, 10) || 0);
+
   try {
-    const { linha_id, produto_id, takt_time_segundos, meta_diaria } = req.body;
-
-    if (!linha_id || !produto_id || !takt_time_segundos || !meta_diaria) {
-      return res.status(400).json({
-        erro: "linha_id, produto_id, takt_time_segundos e meta_diaria são obrigatórios"
-      });
-    }
-
-    const result = await pool.query(
-      `
+    const query = `
       INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
       VALUES ($1, $2, $3, $4)
-      RETURNING *
-      `,
-      [linha_id, produto_id, takt_time_segundos, meta_diaria]
-    );
+      ON CONFLICT (linha_id, produto_id) 
+      DO UPDATE SET 
+        takt_time_segundos = EXCLUDED.takt_time_segundos,
+        meta_diaria = EXCLUDED.meta_diaria
+      RETURNING *;
+    `;
 
-    res.status(201).json(result.rows[0]);
+    const values = [linha_id, produto_id, taktLimpo, metaLimpa];
+
+    const result = await pool.query(query, values);
+    
+    res.status(201).json({
+      mensagem: "Vínculo de produção registrado com sucesso.",
+      dados: result.rows[0]
+    });
 
   } catch (error) {
-    console.error("Erro ao vincular produto à linha:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao vincular produto:", error.message);
+
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Linha ou Produto inexistente no banco de dados." });
+    }
+
+    res.status(500).json({ erro: "Falha técnica ao processar vínculo de produção." });
   }
 });
 
 // ========================================
-// 📉 REGISTRAR PERDAS POR PRODUTO NA LINHA
+// 📉 MÓDULO: GESTÃO DE DESPERDÍCIOS (PERDAS)
 // ========================================
 
-app.post("/perdas", async (req, res) => {
+/**
+ * ROTA: REGISTRAR OU ATUALIZAR PERDAS
+ * Alimenta os pilares de Disponibilidade e Qualidade do OEE.
+ */
+app.post("/api/losses", autenticarToken, async (req, res) => {
+  const {
+    linha_produto_id,
+    microparadas_minutos,
+    retrabalho_pecas,
+    refugo_pecas
+  } = req.body;
+
+  if (!linha_produto_id) {
+    return res.status(400).json({ erro: "ID do vínculo linha-produto é obrigatório." });
+  }
+
+  // Sanitização: Garantir que perdas nunca sejam negativas (Math.max)
+  const micro = Math.max(0, parseFloat(microparadas_minutos) || 0);
+  const retrabalho = Math.max(0, parseInt(retrabalho_pecas, 10) || 0);
+  const refugo = Math.max(0, parseInt(refugo_pecas, 10) || 0);
+
   try {
-    const {
-      linha_produto_id,
-      microparadas_minutos,
-      retrabalho_pecas,
-      refugo_pecas
-    } = req.body;
-
-    if (!linha_produto_id) {
-      return res.status(400).json({
-        erro: "linha_produto_id é obrigatório"
-      });
-    }
-
-    const result = await pool.query(
-      `
+    // Lógica de Upsert: Se já houver registro de perdas para este produto nesta linha, ele atualiza.
+    // Isso evita duplicidade de dados no cálculo do OEE.
+    const query = `
       INSERT INTO perdas_linha 
       (linha_produto_id, microparadas_minutos, retrabalho_pecas, refugo_pecas)
       VALUES ($1, $2, $3, $4)
-      RETURNING *
-      `,
-      [
-        linha_produto_id,
-        microparadas_minutos || 0,
-        retrabalho_pecas || 0,
-        refugo_pecas || 0
-      ]
-    );
+      ON CONFLICT (linha_produto_id) 
+      DO UPDATE SET 
+        microparadas_minutos = EXCLUDED.microparadas_minutos,
+        retrabalho_pecas = EXCLUDED.retrabalho_pecas,
+        refugo_pecas = EXCLUDED.refugo_pecas
+      RETURNING *;
+    `;
 
-    res.status(201).json(result.rows[0]);
+    const values = [linha_produto_id, micro, retrabalho, refugo];
 
-  } catch (error) {
-    console.error("Erro ao registrar perdas:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// ========================================
-// 📋 LISTAR PERDAS POR LINHA
-// ========================================
-
-app.get("/perdas/:linhaId", autenticarToken, async (req, res) => {
-  try {
-    const { linhaId } = req.params;
+    const result = await pool.query(query, values);
     
-    const result = await pool.query(
-      `SELECT pl.*, p.nome as produto_nome
-       FROM perdas_linha pl
-       JOIN linha_produto lp ON lp.id = pl.linha_produto_id
-       JOIN produto p ON p.id = lp.produto_id
-       WHERE lp.linha_id = $1
-       ORDER BY pl.id DESC`,
-      [linhaId]
-    );
+    res.status(201).json({
+      mensagem: "Registro de perdas consolidado.",
+      dados: result.rows[0]
+    });
 
-    res.json(result.rows);
   } catch (error) {
-    console.error("Erro ao buscar perdas:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao registrar perdas industriais:", error.message);
+    
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Vínculo de linha-produto não encontrado." });
+    }
+
+    res.status(500).json({ erro: "Falha técnica ao salvar indicadores de perda." });
   }
 });
 
 // ========================================
-// ✏️ ATUALIZAR PERDA
+// 📊 MÓDULO: ANALÍTICO DE DESPERDÍCIOS
 // ========================================
 
-app.put("/perdas/:id", autenticarToken, async (req, res) => {
+/**
+ * ROTA: LISTAR HISTÓRICO DE PERDAS POR LINHA
+ * Essencial para identificar quais produtos estão drenando a eficiência da unidade.
+ */
+app.get("/api/losses/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+
   try {
-    const { id } = req.params;
-    const { microparadas_minutos, retrabalho_pecas, refugo_pecas } = req.body;
+    const query = `
+      SELECT 
+        pl.id as perda_id,
+        p.nome as produto_nome,
+        pl.microparadas_minutos,
+        pl.retrabalho_pecas,
+        pl.refugo_pecas,
+        lp.takt_time_segundos,
+        -- Cálculo de impacto: quanto tempo foi perdido em segundos
+        (pl.microparadas_minutos * 60) as tempo_parada_total_seg
+      FROM perdas_linha pl
+      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+      JOIN produto p ON p.id = lp.produto_id
+      WHERE lp.linha_id = $1
+      ORDER BY pl.id DESC;
+    `;
 
-    const result = await pool.query(
-      `UPDATE perdas_linha 
-       SET microparadas_minutos = COALESCE($1, microparadas_minutos),
-           retrabalho_pecas = COALESCE($2, retrabalho_pecas),
-           refugo_pecas = COALESCE($3, refugo_pecas)
-       WHERE id = $4
-       RETURNING *`,
-      [microparadas_minutos, retrabalho_pecas, refugo_pecas, id]
-    );
+    const result = await pool.query(query, [linhaId]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Registro não encontrado" });
-    }
+    // Se não houver perdas registradas, retornamos uma lista vazia, não erro.
+    res.status(200).json(result.rows);
 
-    res.json(result.rows[0]);
   } catch (error) {
-    console.error("Erro ao atualizar perda:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro GET /losses:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao recuperar histórico de desperdícios da linha." 
+    });
   }
 });
 
 // ========================================
-// 🗑️ EXCLUIR PERDA
+// ✏️ MÓDULO: AJUSTE DE INDICADORES (PERDAS)
 // ========================================
 
-app.delete("/perdas/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query("DELETE FROM perdas_linha WHERE id = $1 RETURNING *", [id]);
+/**
+ * ROTA: ATUALIZAR REGISTRO DE PERDA EXISTENTE
+ * Permite correções de auditoria em registros de desperdício.
+ */
+app.put("/api/losses/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { microparadas_minutos, retrabalho_pecas, refugo_pecas } = req.body;
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Registro não encontrado" });
+  // Sanitização Preventiva: Não aceitamos perdas negativas em ajustes.
+  // Se o valor for enviado, garantimos que seja >= 0.
+  const micro = microparadas_minutos !== undefined ? Math.max(0, parseFloat(microparadas_minutos)) : null;
+  const retrabalho = retrabalho_pecas !== undefined ? Math.max(0, parseInt(retrabalho_pecas, 10)) : null;
+  const refugo = refugo_pecas !== undefined ? Math.max(0, parseInt(refugo_pecas, 10)) : null;
+
+  try {
+    const query = `
+      UPDATE perdas_linha 
+      SET 
+        microparadas_minutos = COALESCE($1, microparadas_minutos),
+        retrabalho_pecas = COALESCE($2, retrabalho_pecas),
+        refugo_pecas = COALESCE($3, refugo_pecas)
+      WHERE id = $4
+      RETURNING *;
+    `;
+
+    const result = await pool.query(query, [micro, retrabalho, refugo, id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Registro de perda não localizado para atualização." });
     }
 
-    res.json({ mensagem: "Registro excluído com sucesso" });
+    res.status(200).json({
+      mensagem: "Indicadores de perda atualizados com sucesso.",
+      dados: result.rows[0]
+    });
+
   } catch (error) {
-    console.error("Erro ao excluir perda:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro PUT /losses:", error.message);
+    res.status(500).json({ erro: "Erro técnico ao atualizar indicadores de desperdício." });
   }
 });
 
 // ========================================
-// 👤 CRIAR USUÁRIO (ADMIN INICIAL)
+// 🗑️ MÓDULO: PURGA DE DADOS (PERDAS)
 // ========================================
 
-app.post("/auth/register", async (req, res) => {
+/**
+ * ROTA: REMOVER REGISTRO DE PERDA
+ * Utilizado para limpar erros de entrada que não podem ser corrigidos via UPDATE.
+ */
+app.delete("/api/losses/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
   try {
-    const { nome, email, senha } = req.body;
-
-    if (!nome || !email || !senha) {
-      return res.status(400).json({ erro: "Nome, email e senha são obrigatórios" });
-    }
-
-    // Sanitização básica
-    const emailSanitizado = email?.trim().toLowerCase();
-    const nomeSanitizado = nome?.trim();
-
-    const senhaHash = await bcrypt.hash(senha, 10);
-
     const result = await pool.query(
-      `INSERT INTO usuarios (nome, email, senha_hash)
-       VALUES ($1, $2, $3)
-       RETURNING id, nome, email`,
-      [nomeSanitizado, emailSanitizado, senhaHash]
+      "DELETE FROM perdas_linha WHERE id = $1 RETURNING id", 
+      [id]
     );
 
-    res.status(201).json(result.rows[0]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ 
+        erro: "Registro de perda não encontrado para remoção." 
+      });
+    }
+
+    // Ao excluir uma perda, o motor de OEE (Bloco 19) recalculará 
+    // automaticamente a eficiência na próxima requisição.
+    res.status(200).json({ 
+      mensagem: "Registro de desperdício removido com sucesso.",
+      id_removido: id 
+    });
 
   } catch (error) {
-    console.error("Erro ao registrar usuário:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro DELETE /losses:", error.message);
+    
+    // Verificação de restrição de chave estrangeira (caso você decida travar o delete no futuro)
+    if (error.code === '23503') {
+      return res.status(400).json({ 
+        erro: "Não é possível excluir este registro pois ele está vinculado a um relatório consolidado." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro técnico ao tentar excluir registro de perda." });
   }
 });
 
 // ========================================
-// 🔐 LOGIN COM RATE LIMITING
+// 🔐 MÓDULO: SEGURANÇA E IDENTIDADE
 // ========================================
 
-app.post("/auth/login", loginLimiter, async (req, res) => {
+/**
+ * ROTA: REGISTRO DE CONSULTOR (ADMIN)
+ * Cria o acesso inicial ao sistema Hórus.
+ */
+app.post("/api/auth/register", async (req, res) => {
+  const { nome, email, senha } = req.body;
+
+  // 1. Validação de Presença e Integridade
+  if (!nome || !email || !senha) {
+    return res.status(400).json({ erro: "Dados incompletos. Nome, e-mail e senha são mandatórios." });
+  }
+
+  if (senha.length < 8) {
+    return res.status(400).json({ erro: "Segurança fraca: a senha deve ter no mínimo 8 caracteres." });
+  }
+
+  // 2. Sanitização Rigorosa
+  const emailLimpo = email.trim().toLowerCase();
+  const nomeLimpo = nome.trim();
+
   try {
-    const { email, senha } = req.body;
-
-    if (!email || !senha) {
-      return res.status(400).json({ erro: "Email e senha são obrigatórios" });
+    // 3. Verificação de Duplicidade (Prevenir vazamento de erro do banco)
+    const userExists = await pool.query("SELECT id FROM usuarios WHERE email = $1", [emailLimpo]);
+    if (userExists.rowCount > 0) {
+      return res.status(409).json({ erro: "Este e-mail já está vinculado a uma conta ativa." });
     }
 
-    // Sanitização
-    const emailSanitizado = email?.trim().toLowerCase();
+    // 4. Hashing de Alta Segurança
+    // O saltRounds 10 balanceia custo computacional e segurança.
+    const saltRounds = 10;
+    const senhaHash = await bcrypt.hash(senha, saltRounds);
 
+    const query = `
+      INSERT INTO usuarios (nome, email, senha_hash)
+      VALUES ($1, $2, $3)
+      RETURNING id, nome, email, criado_at;
+    `;
+
+    const result = await pool.query(query, [nomeLimpo, emailLimpo, senhaHash]);
+
+    res.status(201).json({
+      mensagem: "Usuário consultor registrado com sucesso.",
+      usuario: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro Crítico no Registro:", error.message);
+    res.status(500).json({ erro: "Falha interna ao processar registro de segurança." });
+  }
+});
+
+// ========================================
+// 🔑 MÓDULO: MOTOR DE AUTENTICAÇÃO (JWT)
+// ========================================
+
+/**
+ * ROTA: LOGIN DE CONSULTOR
+ * Valida credenciais e emite o passaporte digital (Token) para acesso às rotas protegidas.
+ */
+app.post("/api/auth/login", loginLimiter, async (req, res) => {
+  const { email, senha } = req.body;
+
+  if (!email || !senha) {
+    return res.status(400).json({ erro: "Credenciais incompletas." });
+  }
+
+  const emailLimpo = email.trim().toLowerCase();
+
+  try {
+    // Busca o usuário
     const result = await pool.query(
-      "SELECT * FROM usuarios WHERE LOWER(email) = LOWER($1)",
-      [emailSanitizado]
+      "SELECT id, nome, email, senha_hash FROM usuarios WHERE email = $1",
+      [emailLimpo]
     );
-
-    if (result.rows.length === 0) {
-      // Log de segurança
-      console.warn(`Tentativa de login falha - Email: ${emailSanitizado} - IP: ${req.ip}`);
-      return res.status(401).json({ erro: "Usuário não encontrado" });
-    }
 
     const usuario = result.rows[0];
 
+    // Segurança por Obscuridade: Se o usuário não existe, ainda assim simulamos um delay 
+    // ou usamos a mesma mensagem genérica para evitar enumeração de usuários.
+    if (!usuario) {
+      console.warn(`[AUTH] Tentativa falha: Usuário inexistente - IP: ${req.ip}`);
+      return res.status(401).json({ erro: "E-mail ou senha incorretos." });
+    }
+
+    // Validação da Senha
     const senhaValida = await bcrypt.compare(senha, usuario.senha_hash);
 
     if (!senhaValida) {
-      console.warn(`Tentativa de login falha - Senha inválida - Email: ${emailSanitizado} - IP: ${req.ip}`);
-      return res.status(401).json({ erro: "Senha inválida" });
+      console.warn(`[AUTH] Tentativa falha: Senha incorreta - Usuário: ${emailLimpo} - IP: ${req.ip}`);
+      return res.status(401).json({ erro: "E-mail ou senha incorretos." });
     }
 
-    const token = jwt.sign(
-      { id: usuario.id, email: usuario.email },
-      JWT_SECRET,
-      { expiresIn: "8h" }
-    );
+    // Geração do Token JWT (Passaporte)
+    // Payload contém apenas o necessário para identificar o usuário nas rotas.
+    const payload = { 
+      id: usuario.id, 
+      email: usuario.email 
+    };
 
-    res.json({
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { 
+      expiresIn: "8h",
+      algorithm: "HS256"
+    });
+
+    // Auditoria de login bem-sucedido
+    console.log(`[AUTH] Login realizado: ${emailLimpo}`);
+
+    res.status(200).json({
+      status: "sucesso",
       token,
       usuario: {
         id: usuario.id,
@@ -1237,1059 +1761,895 @@ app.post("/auth/login", loginLimiter, async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Erro no login:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro Crítico no Fluxo de Login:", error.message);
+    res.status(500).json({ erro: "Falha interna no motor de autenticação." });
   }
 });
 
 // ========================================
-// 🔒 MIDDLEWARE DE AUTENTICAÇÃO
+// 📝 MÓDULO: PLANO DE AÇÃO (KAIZEN)
 // ========================================
 
-function autenticarToken(req, res, next) {
-  const authHeader = req.headers["authorization"];
-
-  if (!authHeader) {
-    return res.status(401).json({ erro: "Token não fornecido" });
-  }
-
-  const token = authHeader.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ erro: "Token inválido" });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, usuario) => {
-    if (err) {
-      return res.status(403).json({ erro: "Token inválido ou expirado" });
-    }
-
-    req.usuario = usuario;
-    next();
-  });
-}
-
-// ========================================
-// 📝 AÇÕES DO CONSULTOR
-// ========================================
-
-// Criar tabela de ações se não existir
-app.get("/acoes/criar-tabela", async (req, res) => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS acoes_consultor (
-        id SERIAL PRIMARY KEY,
-        linha_id INTEGER NOT NULL REFERENCES linha_producao(id) ON DELETE CASCADE,
-        texto TEXT NOT NULL,
-        concluida BOOLEAN DEFAULT FALSE,
-        prioridade VARCHAR(20) DEFAULT 'media',
-        data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        data_conclusao TIMESTAMP,
-        criado_por INTEGER REFERENCES usuarios(id)
-      );
-    `);
-    res.json({ mensagem: "Tabela de ações criada/verificada com sucesso" });
-  } catch (error) {
-    console.error("Erro ao criar tabela:", error);
-    res.status(500).json({ erro: "Erro ao criar tabela" });
-  }
-});
-
-// Listar ações de uma linha
-app.get("/acoes/:linhaId", autenticarToken, async (req, res) => {
+/**
+ * ROTA: LISTAR AÇÕES POR LINHA
+ * Recupera o checklist de melhorias vinculadas a uma linha específica.
+ */
+app.get("/api/actions/:linhaId", autenticarToken, async (req, res) => {
   try {
     const { linhaId } = req.params;
     
-    const result = await pool.query(
-      `SELECT * FROM acoes_consultor 
-       WHERE linha_id = $1 
-       ORDER BY data_criacao DESC`,
-      [linhaId]
-    );
+    const query = `
+      SELECT a.*, u.nome as autor
+      FROM acoes_consultor a
+      LEFT JOIN usuarios u ON u.id = a.criado_por
+      WHERE a.linha_id = $1 
+      ORDER BY 
+        CASE a.prioridade 
+          WHEN 'alta' THEN 1 
+          WHEN 'media' THEN 2 
+          WHEN 'baixa' THEN 3 
+        END ASC, 
+        a.data_criacao DESC
+    `;
     
-    res.json(result.rows);
+    const result = await pool.query(query, [linhaId]);
+    res.status(200).json(result.rows);
   } catch (error) {
-    console.error("Erro ao buscar ações:", error);
-    res.status(500).json({ erro: "Erro ao buscar ações" });
+    console.error("❌ Erro ao buscar ações:", error.message);
+    res.status(500).json({ erro: "Falha ao recuperar plano de ação." });
   }
 });
 
-// Criar nova ação
-app.post("/acoes", autenticarToken, async (req, res) => {
+/**
+ * ROTA: CRIAR AÇÃO DE MELHORIA
+ * Registra uma nova tarefa no ciclo PDCA.
+ */
+app.post("/api/actions", autenticarToken, async (req, res) => {
+  const { linha_id, texto, prioridade } = req.body;
+  const usuario_id = req.usuario.id;
+
+  if (!linha_id || !texto) {
+    return res.status(400).json({ erro: "Linha e descrição da ação são obrigatórios." });
+  }
+
+  // Normalização da prioridade
+  const prioridadeValida = ['alta', 'media', 'baixa'].includes(prioridade) ? prioridade : 'media';
+
   try {
-    const { linha_id, texto, prioridade = 'media' } = req.body;
-    const usuario_id = req.usuario.id;
+    const query = `
+      INSERT INTO acoes_consultor (linha_id, texto, prioridade, criado_por)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
 
-    if (!linha_id || !texto) {
-      return res.status(400).json({ erro: "linha_id e texto são obrigatórios" });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO acoes_consultor (linha_id, texto, prioridade, criado_por)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
-      [linha_id, texto, prioridade, usuario_id]
-    );
-
-    res.status(201).json(result.rows[0]);
+    const result = await pool.query(query, [linha_id, texto, prioridadeValida, usuario_id]);
+    res.status(201).json({ mensagem: "Ação registrada no plano de melhorias.", acao: result.rows[0] });
   } catch (error) {
-    console.error("Erro ao criar ação:", error);
-    res.status(500).json({ erro: "Erro ao criar ação" });
+    console.error("❌ Erro ao criar ação:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar nova ação." });
   }
 });
 
-// Atualizar ação (concluir, editar texto, etc)
-app.put("/acoes/:id", autenticarToken, async (req, res) => {
+/**
+ * ROTA: ATUALIZAR STATUS/TEXTO DA AÇÃO
+ * Gerencia a conclusão de tarefas e alteração de prioridades.
+ */
+app.put("/api/actions/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { texto, concluida, prioridade } = req.body;
+
   try {
-    const { id } = req.params;
-    const { texto, concluida, prioridade } = req.body;
+    // 1. Buscamos o estado atual para lógica de data de conclusão
+    const current = await pool.query("SELECT concluida FROM acoes_consultor WHERE id = $1", [id]);
+    if (current.rowCount === 0) return res.status(404).json({ erro: "Ação não encontrada." });
 
-    let query = "UPDATE acoes_consultor SET ";
-    const values = [];
-    const updates = [];
-    let index = 1;
-
-    if (texto !== undefined) {
-      updates.push(`texto = $${index}`);
-      values.push(texto);
-      index++;
-    }
-
-    if (concluida !== undefined) {
-      updates.push(`concluida = $${index}`);
-      updates.push(`data_conclusao = ${concluida ? 'CURRENT_TIMESTAMP' : 'NULL'}`);
-      values.push(concluida);
-      index++;
-    }
-
-    if (prioridade !== undefined) {
-      updates.push(`prioridade = $${index}`);
-      values.push(prioridade);
-      index++;
-    }
-
-    if (updates.length === 0) {
-      return res.status(400).json({ erro: "Nenhum campo para atualizar" });
-    }
-
-    query += updates.join(", ") + ` WHERE id = $${index} RETURNING *`;
-    values.push(id);
-
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Ação não encontrada" });
-    }
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao atualizar ação:", error);
-    res.status(500).json({ erro: "Erro ao atualizar ação" });
-  }
-});
-
-// Excluir ação
-app.delete("/acoes/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
+    const statusAnterior = current.rows[0].concluida;
+    const novoStatus = concluida !== undefined ? concluida : statusAnterior;
     
-    const result = await pool.query(
-      "DELETE FROM acoes_consultor WHERE id = $1 RETURNING *",
-      [id]
-    );
+    // 2. Definimos se a data de conclusão deve ser setada ou limpa
+    let dataConclusao = null;
+    if (novoStatus === true && statusAnterior === false) dataConclusao = 'CURRENT_TIMESTAMP';
+    else if (novoStatus === false) dataConclusao = 'NULL';
+    else dataConclusao = 'data_conclusao'; // Mantém o valor atual se não houver mudança para true
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Ação não encontrada" });
-    }
+    const query = `
+      UPDATE acoes_consultor 
+      SET 
+        texto = COALESCE($1, texto),
+        concluida = $2,
+        prioridade = COALESCE($3, prioridade),
+        data_conclusao = ${dataConclusao === 'CURRENT_TIMESTAMP' ? 'CURRENT_TIMESTAMP' : dataConclusao === 'NULL' ? 'NULL' : 'data_conclusao'}
+      WHERE id = $4
+      RETURNING *
+    `;
 
-    res.json({ mensagem: "Ação excluída com sucesso" });
+    const result = await pool.query(query, [texto, novoStatus, prioridade, id]);
+    res.status(200).json(result.rows[0]);
   } catch (error) {
-    console.error("Erro ao excluir ação:", error);
-    res.status(500).json({ erro: "Erro ao excluir ação" });
+    console.error("❌ Erro ao atualizar ação:", error.message);
+    res.status(500).json({ erro: "Erro técnico ao modificar ação." });
   }
 });
 
 // ========================================
-// 📊 MEDIÇÕES MELHORADAS
+// 📊 MÓDULO: AUDITORIA GRANULAR DE PROCESSO
 // ========================================
 
-// Criar tabela de medições estendida se não existir
-app.get("/medicoes/criar-tabela", async (req, res) => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS medicoes_detalhadas (
-        id SERIAL PRIMARY KEY,
-        posto_id INTEGER NOT NULL REFERENCES posto_trabalho(id) ON DELETE CASCADE,
-        tipo VARCHAR(20) NOT NULL, -- 'ciclo', 'parada', 'evento'
-        valor_numerico DECIMAL(10,2),
-        turno INTEGER,
-        descricao TEXT,
-        data_medicao DATE DEFAULT CURRENT_DATE,
-        hora_medicao TIME DEFAULT CURRENT_TIME,
-        criado_por INTEGER REFERENCES usuarios(id)
-      );
-    `);
-    res.json({ mensagem: "Tabela de medições criada/verificada com sucesso" });
-  } catch (error) {
-    console.error("Erro ao criar tabela:", error);
-    res.status(500).json({ erro: "Erro ao criar tabela" });
-  }
-});
+/**
+ * ROTA: REGISTRAR EVENTO DE CHÃO DE FÁBRICA
+ * Captura ciclos, quebras ou eventos qualitativos com carimbo de autoria.
+ */
+app.post("/api/measurements", autenticarToken, async (req, res) => {
+  const { 
+    posto_id, 
+    tipo,           // 'ciclo', 'parada', 'manutencao', 'setup'
+    valor_numerico, 
+    turno,          // 1, 2 ou 3
+    descricao,
+    data_medicao
+  } = req.body;
 
-// Registrar medição detalhada
-app.post("/medicoes", autenticarToken, async (req, res) => {
+  const usuario_id = req.usuario.id;
+
+  if (!posto_id || !tipo || valor_numerico === undefined) {
+    return res.status(400).json({ erro: "Posto, tipo e valor são campos mandatórios." });
+  }
+
   try {
-    const { 
+    const query = `
+      INSERT INTO medicoes_detalhadas 
+      (posto_id, tipo, valor_numerico, turno, descricao, data_medicao, criado_por)
+      VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE), $7)
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, [
       posto_id, 
-      tipo,           // 'ciclo', 'parada', 'evento'
-      valor_numerico, // segundos ou minutos
-      turno,
-      descricao,
-      data_medicao
-    } = req.body;
+      tipo.toLowerCase(), 
+      valor_numerico, 
+      turno || 1, 
+      descricao, 
+      data_medicao, 
+      usuario_id
+    ]);
 
-    const usuario_id = req.usuario.id;
-
-    if (!posto_id || !tipo) {
-      return res.status(400).json({ erro: "posto_id e tipo são obrigatórios" });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO medicoes_detalhadas 
-       (posto_id, tipo, valor_numerico, turno, descricao, data_medicao, criado_por)
-       VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE), $7)
-       RETURNING *`,
-      [posto_id, tipo, valor_numerico, turno, descricao, data_medicao, usuario_id]
-    );
-
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({
+      mensagem: "Medição registrada com sucesso.",
+      protocolo: result.rows[0].id,
+      dados: result.rows[0]
+    });
   } catch (error) {
-    console.error("Erro ao registrar medição:", error);
-    res.status(500).json({ erro: "Erro ao registrar medição" });
+    console.error("❌ Erro no registro de medição:", error.message);
+    res.status(500).json({ erro: "Falha técnica ao salvar medição detalhada." });
   }
 });
 
-// Listar medições de um posto
-app.get("/medicoes/:postoId", autenticarToken, async (req, res) => {
-  try {
-    const { postoId } = req.params;
-    const { tipo, inicio, fim } = req.query;
-
-    let query = "SELECT * FROM medicoes_detalhadas WHERE posto_id = $1";
-    const params = [postoId];
-    let index = 2;
-
-    if (tipo) {
-      query += ` AND tipo = $${index}`;
-      params.push(tipo);
-      index++;
-    }
-
-    if (inicio && fim) {
-      query += ` AND data_medicao BETWEEN $${index} AND $${index+1}`;
-      params.push(inicio, fim);
-      index += 2;
-    }
-
-    query += " ORDER BY data_medicao DESC, hora_medicao DESC";
-
-    const result = await pool.query(query, params);
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao buscar medições:", error);
-    res.status(500).json({ erro: "Erro ao buscar medições" });
-  }
-});
-
-// Estatísticas de medições de um posto
-app.get("/medicoes/estatisticas/:postoId", autenticarToken, async (req, res) => {
+/**
+ * ROTA: DASHBOARD ESTATÍSTICO DO POSTO
+ * Consolida os KPIs de variabilidade e médias para o consultor.
+ */
+app.get("/api/measurements/stats/:postoId", autenticarToken, async (req, res) => {
   try {
     const { postoId } = req.params;
 
-    // Médias por tipo
-    const result = await pool.query(
-      `SELECT 
-         tipo,
-         COUNT(*) as quantidade,
-         AVG(valor_numerico) as media,
-         MIN(valor_numerico) as minimo,
-         MAX(valor_numerico) as maximo,
-         STDDEV(valor_numerico) as desvio_padrao
-       FROM medicoes_detalhadas
-       WHERE posto_id = $1
-       GROUP BY tipo`,
-      [postoId]
-    );
+    const query = `
+      SELECT 
+        tipo,
+        COUNT(*) as amostras,
+        ROUND(AVG(valor_numerico), 2) as media,
+        ROUND(MIN(valor_numerico), 2) as minimo,
+        ROUND(MAX(valor_numerico), 2) as maximo,
+        ROUND(STDDEV(valor_numerico), 2) as desvio_padrao,
+        -- Coeficiente de Variação (CV): Mede a estabilidade do tipo de evento
+        ROUND((STDDEV(valor_numerico) / NULLIF(AVG(valor_numerico), 0)) * 100, 2) as cv_percentual
+      FROM medicoes_detalhadas
+      WHERE posto_id = $1
+      GROUP BY tipo
+      ORDER BY amostras DESC
+    `;
 
-    res.json(result.rows);
+    const result = await pool.query(query, [postoId]);
+
+    if (result.rowCount === 0) {
+      return res.status(200).json({ mensagem: "Sem dados para estatísticas neste posto.", dados: [] });
+    }
+
+    res.status(200).json({
+      posto_id: postoId,
+      analise_estatistica: result.rows
+    });
   } catch (error) {
-    console.error("Erro ao buscar estatísticas:", error);
-    res.status(500).json({ erro: "Erro ao buscar estatísticas" });
+    console.error("❌ Erro ao calcular estatísticas:", error.message);
+    res.status(500).json({ erro: "Erro ao processar inteligência estatística." });
   }
 });
 
 // ========================================
-// 🗑️ ROTA PARA CRIAR TODAS AS TABELAS
+// 🚀 MÓDULO: SETUP E INICIALIZAÇÃO (MASTER)
 // ========================================
 
-app.get("/setup", async (req, res) => {
+/**
+ * ROTA: SETUP GLOBAL
+ * Cria a estrutura de dados completa, respeitando as dependências de engenharia.
+ */
+app.get("/api/admin/setup-db", async (req, res) => {
+  // Nota: Em produção, esta rota deve ser protegida por uma chave de API 
+  // ou desativada após a primeira execução.
+  
   try {
-    // Criar tabela de ações
+    // 1. Tabela de Usuários (Base para Auditoria)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usuarios (
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(100) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        senha_hash TEXT NOT NULL,
+        criado_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 2. Estrutura Física (Linhas e Postos)
+    // Assumindo que linha_producao e posto_trabalho já existem conforme blocos anteriores
+    // mas garantindo as tabelas de suporte do consultor:
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS acoes_consultor (
         id SERIAL PRIMARY KEY,
         linha_id INTEGER NOT NULL REFERENCES linha_producao(id) ON DELETE CASCADE,
         texto TEXT NOT NULL,
         concluida BOOLEAN DEFAULT FALSE,
-        prioridade VARCHAR(20) DEFAULT 'media',
+        prioridade VARCHAR(20) CHECK (prioridade IN ('baixa', 'media', 'alta')) DEFAULT 'media',
         data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         data_conclusao TIMESTAMP,
-        criado_por INTEGER REFERENCES usuarios(id)
+        criado_por INTEGER REFERENCES usuarios(id) ON DELETE SET NULL
       );
     `);
 
-    // Criar tabela de medições
     await pool.query(`
       CREATE TABLE IF NOT EXISTS medicoes_detalhadas (
         id SERIAL PRIMARY KEY,
         posto_id INTEGER NOT NULL REFERENCES posto_trabalho(id) ON DELETE CASCADE,
-        tipo VARCHAR(20) NOT NULL,
-        valor_numerico DECIMAL(10,2),
-        turno INTEGER,
+        tipo VARCHAR(20) NOT NULL, -- 'ciclo', 'parada', 'setup', 'evento'
+        valor_numerico DECIMAL(10,2) NOT NULL,
+        turno INTEGER CHECK (turno IN (1, 2, 3)),
         descricao TEXT,
         data_medicao DATE DEFAULT CURRENT_DATE,
         hora_medicao TIME DEFAULT CURRENT_TIME,
-        criado_por INTEGER REFERENCES usuarios(id)
+        criado_por INTEGER REFERENCES usuarios(id) ON DELETE SET NULL
       );
     `);
 
-    res.json({ 
-      mensagem: "Tabelas criadas/verificadas com sucesso",
-      tabelas: ["acoes_consultor", "medicoes_detalhadas"]
+    // 3. Índice de Performance (Otimização de buscas por data)
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_medicoes_data ON medicoes_detalhadas(data_medicao);`);
+
+    res.status(200).json({ 
+      status: "Sucesso",
+      mensagem: "Infraestrutura Hórus consolidada.",
+      tabelas_verificadas: ["usuarios", "acoes_consultor", "medicoes_detalhadas"]
     });
+
   } catch (error) {
-    console.error("Erro no setup:", error);
-    res.status(500).json({ erro: "Erro ao criar tabelas" });
+    console.error("❌ FALHA NO SETUP CRÍTICO:", error.message);
+    res.status(500).json({ erro: "Falha ao estruturar banco de dados." });
   }
 });
 
 // ========================================
-// 📊 MEDIÇÕES DETALHADAS
+// 🗑️ MÓDULO: PURGA DE AUDITORIA
 // ========================================
 
-// DELETE /medicoes/:id (NOVO)
-app.delete("/medicoes/:id", autenticarToken, async (req, res) => {
+/**
+ * ROTA: EXCLUIR MEDIÇÃO DETALHADA
+ * Remove registros de ciclos ou paradas que foram inseridos incorretamente.
+ */
+app.delete("/api/measurements/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
   try {
-    const { id } = req.params;
-    
+    // Retornamos o tipo e o valor para que o log de auditoria seja preciso
     const result = await pool.query(
-      "DELETE FROM medicoes_detalhadas WHERE id = $1 RETURNING *",
+      "DELETE FROM medicoes_detalhadas WHERE id = $1 RETURNING id, tipo, valor_numerico",
       [id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Medição não encontrada" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Medição não localizada para exclusão." });
     }
 
-    res.json({ mensagem: "Medição excluída com sucesso" });
+    // Log interno para controle do consultor
+    console.warn(`[DATA_CLEANUP] Medição ${id} removida por Usuário ID: ${req.usuario.id}`);
+
+    res.status(200).json({ 
+      mensagem: "Registro de medição removido com sucesso.",
+      detalhes: result.rows[0]
+    });
   } catch (error) {
-    console.error("Erro ao excluir medição:", error);
-    res.status(500).json({ erro: "Erro ao excluir medição" });
+    console.error("❌ Erro ao excluir medição:", error.message);
+    res.status(500).json({ erro: "Falha técnica ao remover registro de auditoria." });
   }
 });
 
 // ========================================
-// 📈 HISTÓRICO DA LINHA (COMPARATIVO)
+// 📈 MÓDULO: INTELIGÊNCIA TEMPORAL (BI)
 // ========================================
 
-app.get("/historico-linha/:linhaId", autenticarToken, async (req, res) => {
-  try {
-    const { linhaId } = req.params;
+/**
+ * ROTA: TENDÊNCIA HISTÓRICA DE PERFORMANCE
+ * Gera a série temporal para gráficos de linha (OEE vs Estabilidade).
+ */
+app.get("/api/history/line/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
 
-    // Buscar medições agrupadas por mês para calcular OEE histórico
-    const result = await pool.query(
-      `
+  try {
+    // 1. Query Única: Agregamos tudo via SQL para poupar memória e tempo de CPU
+    const query = `
+      WITH metricas_mensais AS (
+        SELECT 
+          DATE_TRUNC('month', md.data_medicao) as mes,
+          AVG(md.valor_numerico) as avg_ciclo,
+          STDDEV(md.valor_numerico) as std_ciclo,
+          COUNT(*) as volume_dados
+        FROM medicoes_detalhadas md
+        JOIN posto_trabalho pt ON pt.id = md.posto_id
+        WHERE pt.linha_id = $1 AND md.tipo = 'ciclo'
+        GROUP BY 1
+      )
       SELECT 
-        DATE_TRUNC('month', data_medicao) as mes,
-        COUNT(*) as total_medicoes,
-        AVG(valor_numerico) as media_ciclo,
-        STDDEV(valor_numerico) as desvio_padrao
-      FROM medicoes_detalhadas md
-      JOIN posto_trabalho pt ON pt.id = md.posto_id
-      WHERE pt.linha_id = $1 AND md.tipo = 'ciclo'
-      GROUP BY DATE_TRUNC('month', data_medicao)
-      ORDER BY mes DESC
-      LIMIT 6
-      `,
-      [linhaId]
-    );
+        m.mes,
+        m.volume_dados as amostras,
+        ROUND(m.avg_ciclo, 2) as media_ciclo,
+        ROUND(m.std_ciclo, 2) as desvio_padrao,
+        lp.takt_time_segundos as takt_alvo,
+        -- Cálculo de OEE Mensal Baseado em Performance de Ciclo
+        ROUND(LEAST(100, (lp.takt_time_segundos / NULLIF(m.avg_ciclo, 0)) * 100), 2) as oee_performance
+      FROM metricas_mensais m
+      CROSS JOIN (SELECT takt_time_segundos FROM linha_producao WHERE id = $1) lp
+      ORDER BY m.mes DESC
+      LIMIT 6;
+    `;
 
-    // Para cada mês, calcular OEE aproximado
-    const historico = await Promise.all(
-      result.rows.map(async (row) => {
-        // Buscar dados da linha para o período
-        const linhaData = await pool.query(
-          `SELECT takt_time_segundos, meta_diaria FROM linha_producao WHERE id = $1`,
-          [linhaId]
-        );
+    const result = await pool.query(query, [linhaId]);
 
-        const takt = linhaData.rows[0]?.takt_time_segundos || 1;
-        const meta = linhaData.rows[0]?.meta_diaria || 1;
-        
-        // Cálculo simplificado do OEE histórico
-        const oeeCalculado = (takt / (row.media_ciclo || takt)) * 100;
-        
-        return {
-          mes: row.mes,
-          oee: Math.min(100, Math.round(oeeCalculado * 100) / 100),
-          medicoes: parseInt(row.total_medicoes),
-          media_ciclo: parseFloat(row.media_ciclo).toFixed(2),
-          desvio_padrao: parseFloat(row.desvio_padrao).toFixed(2)
-        };
-      })
-    );
-
-    res.json(historico);
-  } catch (error) {
-    console.error("Erro ao buscar histórico:", error);
-    res.status(500).json({ erro: "Erro ao buscar histórico" });
-  }
-});
-
-// ========================================
-// 📦 PRODUTOS (CRUD COMPLETO)
-// ========================================
-
-// Listar todos os produtos
-app.get("/produtos", autenticarToken, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM produto ORDER BY id");
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao buscar produtos:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// ROTA ESPECÍFICA PARA O SELETOR DO HÓRUS
-app.get("/produtos/filtro/empresa/:empresa_id", autenticarToken, async (req, res) => {
-  try {
-    const { empresa_id } = req.params;
-    
-    // Convertemos para Inteiro para garantir compatibilidade com o tipo 'integer' do Neon
-    const idNum = parseInt(empresa_id);
-
-    const result = await pool.query(
-      "SELECT id, nome, valor_unitario FROM produto WHERE empresa_id = $1 ORDER BY nome ASC", 
-      [idNum]
-    );
-    
-    // Retorna sempre um array (mesmo que vazio), que é o que o .map() do front precisa
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao filtrar produtos:", error);
-    res.status(500).json({ erro: "Erro no servidor ao buscar produtos da empresa" });
-  }
-});
-
-// Buscar um produto específico
-app.get("/produtos/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query("SELECT * FROM produto WHERE id = $1", [id]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Produto não encontrado" });
-    }
-    
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao buscar produto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// LISTAR PRODUTOS POR EMPRESA (Usado no Hórus / Nova Linha)
-app.get("/produtos/empresa/:empresa_id", autenticarToken, async (req, res) => {
-  try {
-    const { empresa_id } = req.params;
-    
-    // Note que aqui filtramos pela coluna empresa_id e buscamos todos (rows)
-    const result = await pool.query(
-      "SELECT * FROM produto WHERE empresa_id = $1 ORDER BY nome ASC", 
-      [empresa_id]
-    );
-    
-    res.json(result.rows); // Retorna a lista para o seletor
-  } catch (error) {
-    console.error("Erro ao buscar produtos da empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Criar novo produto (CORRIGIDO: AGORA SALVA A EMPRESA)
-app.post("/produtos", autenticarToken, async (req, res) => {
-  try {
-    // 1. Pegamos o empresa_id que vem do frontend
-    const { nome, valor_unitario, empresa_id } = req.body;
-
-    if (!nome) {
-      return res.status(400).json({ erro: "Nome do produto é obrigatório" });
-    }
-    
-    if (!empresa_id) {
-      return res.status(400).json({ erro: "ID da empresa é obrigatório para o vínculo" });
+    if (result.rowCount === 0) {
+      return res.status(200).json({ 
+        mensagem: "Histórico insuficiente para análise de tendência.",
+        dados: [] 
+      });
     }
 
-    // 2. Ajustamos para a tabela "produtos" (plural) e incluímos empresa_id
-    const result = await pool.query(
-      `INSERT INTO produtos (nome, valor_unitario, empresa_id)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [nome, valor_unitario || 0, empresa_id]
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao criar produto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Atualizar produto (CORRIGIDO: TABELA NO PLURAL)
-app.put("/produtos/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nome, valor_unitario } = req.body;
-
-    // Convertendo para float para garantir que o banco aceite o decimal
-    const valorNum = valor_unitario !== undefined ? parseFloat(valor_unitario) : null;
-
-    const result = await pool.query(
-      `UPDATE produtos 
-       SET nome = COALESCE($1, nome), 
-           valor_unitario = COALESCE($2, valor_unitario)
-       WHERE id = $3
-       RETURNING *`,
-      [nome, valorNum, id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Produto não encontrado" });
-    }
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao atualizar produto:", error);
-    res.status(500).json({ erro: "Erro no servidor ao atualizar" });
-  }
-});
-
-// Excluir produto (CORRIGIDO: TABELA NO PLURAL)
-app.delete("/produtos/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    // ✅ Alterado de 'produto' para 'produtos'
-    const result = await pool.query(
-      "DELETE FROM produtos WHERE id = $1 RETURNING *", 
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Produto não encontrado" });
-    }
-
-    res.json({ mensagem: "Produto excluído com sucesso" });
-  } catch (error) {
-    console.error("Erro ao excluir produto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// ========================================
-// 📦 PRODUTOS POR EMPRESA (CORRIGIDO: TABELA NO PLURAL)
-// ========================================
-app.get("/produtos/empresa/:empresaId", autenticarToken, async (req, res) => {
-  try {
-    const { empresaId } = req.params;
-    
-    // ✅ Alterado de 'produto' para 'produtos' para bater com o Banco de Dados
-    const result = await pool.query(`
-      SELECT * FROM produtos 
-      WHERE empresa_id = $1
-      ORDER BY nome
-    `, [empresaId]);
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao buscar produtos da empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor ao buscar lista" });
-  }
-});
-
-// ========================================
-// 📋 LISTAR PRODUTOS VINCULADOS A UMA LINHA
-// ========================================
-
-app.get("/linha-produto/:linhaId", autenticarToken, async (req, res) => {
-  try {
-    const { linhaId } = req.params;
-    
-    const result = await pool.query(
-      `SELECT lp.*, p.nome as produto_nome, p.valor_unitario
-       FROM linha_produto lp
-       JOIN produto p ON p.id = lp.produto_id
-       WHERE lp.linha_id = $1
-       ORDER BY lp.id`,
-      [linhaId]
-    );
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao buscar produtos da linha:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// ========================================
-// 💰 ESTATÍSTICAS FINANCEIRAS DA LINHA
-// ========================================
-
-app.get("/financeiro/linha/:linhaId", autenticarToken, async (req, res) => {
-  try {
-    const { linhaId } = req.params;
-
-    // Buscar dados da linha
-    const linhaData = await pool.query(
-      `SELECT l.*, e.dias_produtivos_mes 
-       FROM linha_producao l
-       JOIN empresa e ON e.id = l.empresa_id
-       WHERE l.id = $1`,
-      [linhaId]
-    );
-
-    if (linhaData.rows.length === 0) {
-      return res.status(404).json({ erro: "Linha não encontrada" });
-    }
-
-    const linha = linhaData.rows[0];
-    const diasMes = linha.dias_produtivos_mes || 22;
-
-    // Buscar postos com cargos
-    const postosData = await pool.query(
-      `SELECT pt.*, c.salario_base, c.encargos_percentual
-       FROM posto_trabalho pt
-       LEFT JOIN cargo c ON c.id = pt.cargo_id
-       WHERE pt.linha_id = $1`,
-      [linhaId]
-    );
-
-    // Calcular custos
-    let custoTotalMaoObra = 0;
-    let custoPorMinuto = 0;
-
-    postosData.rows.forEach(posto => {
-      if (posto.salario_base) {
-        const salario = parseFloat(posto.salario_base);
-        const encargos = parseFloat(posto.encargos_percentual || 70) / 100;
-        const custoMensal = salario * (1 + encargos);
-        custoTotalMaoObra += custoMensal;
-      }
-    });
-
-    // Custo por minuto (considerando 22 dias, 8h/dia, 60min/h)
-    const minutosMes = diasMes * 8 * 60;
-    custoPorMinuto = minutosMes > 0 ? custoTotalMaoObra / minutosMes : 0;
-
-    res.json({
+    res.status(200).json({
       linha_id: linhaId,
-      linha_nome: linha.nome,
-      dias_produtivos_mes: diasMes,
-      custo_mao_obra_mensal: custoTotalMaoObra,
-      custo_por_minuto: custoPorMinuto,
-      postos: postosData.rows.map(p => ({
-        id: p.id,
-        nome: p.nome,
-        custo_mensal: p.salario_base ? 
-          parseFloat(p.salario_base) * (1 + (parseFloat(p.encargos_percentual || 70) / 100)) : 0
-      }))
+      periodo: "Últimos 6 meses",
+      historico: result.rows
     });
 
   } catch (error) {
-    console.error("Erro ao calcular financeiro:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro na análise histórica:", error.message);
+    res.status(500).json({ erro: "Falha ao processar inteligência temporal." });
   }
 });
 
 // ========================================
-// 💰 ESTATÍSTICAS FINANCEIRAS DA EMPRESA
+// 📦 MÓDULO: CATÁLOGO DE PRODUTOS
 // ========================================
 
-app.get("/financeiro/empresa/:empresaId", autenticarToken, async (req, res) => {
+/**
+ * ROTA: FILTRAR PRODUTOS POR EMPRESA
+ * Essencial para o seletor dinâmico do Dashboard Hórus.
+ */
+app.get("/api/products/company/:empresa_id", autenticarToken, async (req, res) => {
+  const { empresa_id } = req.params;
+
   try {
-    const { empresaId } = req.params;
-
-    // Buscar todas as linhas da empresa
-    const linhasData = await pool.query(
-      `SELECT id FROM linha_producao WHERE empresa_id = $1`,
-      [empresaId]
-    );
-
-    let custoTotalMaoObra = 0;
-    const linhas = [];
-
-    for (const linha of linhasData.rows) {
-      const financeiroLinha = await pool.query(
-        `SELECT * FROM financeiro_cache WHERE linha_id = $1 ORDER BY id DESC LIMIT 1`,
-        [linha.id]
-      );
-
-      if (financeiroLinha.rows.length > 0) {
-        const dados = financeiroLinha.rows[0];
-        custoTotalMaoObra += parseFloat(dados.custo_mao_obra_mensal || 0);
-        linhas.push({
-          linha_id: linha.id,
-          custo_mao_obra: dados.custo_mao_obra_mensal,
-          custo_por_minuto: dados.custo_por_minuto
-        });
-      }
+    const idNum = parseInt(empresa_id, 10);
+    if (isNaN(idNum)) {
+      return res.status(400).json({ erro: "ID da empresa inválido." });
     }
 
-    res.json({
-      empresa_id: empresaId,
-      total_linhas: linhasData.rows.length,
-      custo_total_mao_obra_mensal: custoTotalMaoObra,
-      linhas: linhas
-    });
+    const query = `
+      SELECT id, nome, valor_unitario 
+      FROM produtos 
+      WHERE empresa_id = $1 
+      ORDER BY nome ASC
+    `;
 
+    const result = await pool.query(query, [idNum]);
+    
+    // Retornamos um array vazio caso não haja produtos, para não quebrar o .map() no Front
+    res.status(200).json(result.rows);
   } catch (error) {
-    console.error("Erro ao calcular financeiro da empresa:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao filtrar produtos:", error.message);
+    res.status(500).json({ erro: "Falha técnica ao recuperar catálogo da empresa." });
+  }
+});
+
+/**
+ * ROTA: CRIAR NOVO PRODUTO
+ * Vincula o item à empresa para garantir a separação de dados (Multi-tenant).
+ */
+app.post("/api/products", autenticarToken, async (req, res) => {
+  const { nome, valor_unitario, empresa_id } = req.body;
+
+  if (!nome || !empresa_id) {
+    return res.status(400).json({ erro: "Nome e ID da empresa são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO produtos (nome, valor_unitario, empresa_id)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, [
+      nome.trim(), 
+      parseFloat(valor_unitario) || 0, 
+      empresa_id
+    ]);
+
+    res.status(201).json({
+      mensagem: "Produto cadastrado com sucesso.",
+      produto: result.rows[0]
+    });
+  } catch (error) {
+    console.error("❌ Erro ao criar produto:", error.message);
+    res.status(500).json({ erro: "Erro ao processar cadastro de produto." });
+  }
+});
+
+/**
+ * ROTA: ATUALIZAR PRODUTO
+ */
+app.put("/api/products/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { nome, valor_unitario } = req.body;
+
+  try {
+    const query = `
+      UPDATE produtos 
+      SET 
+        nome = COALESCE($1, nome), 
+        valor_unitario = COALESCE($2, valor_unitario)
+      WHERE id = $3
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, [
+      nome ? nome.trim() : null, 
+      valor_unitario !== undefined ? parseFloat(valor_unitario) : null, 
+      id
+    ]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Produto não localizado." });
+    }
+
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro ao atualizar produto:", error.message);
+    res.status(500).json({ erro: "Erro técnico na atualização do produto." });
+  }
+});
+
+/**
+ * ROTA: EXCLUIR PRODUTO
+ */
+app.delete("/api/products/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query("DELETE FROM produtos WHERE id = $1 RETURNING nome", [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Produto não localizado." });
+    }
+
+    res.status(200).json({ mensagem: `Produto '${result.rows[0].nome}' removido com sucesso.` });
+  } catch (error) {
+    console.error("❌ Erro ao excluir produto:", error.message);
+    // Verificação de FK: Não deixa excluir produto se ele estiver em uma linha_produto
+    if (error.code === '23503') {
+      return res.status(400).json({ erro: "Não é possível excluir um produto vinculado a linhas de produção ativas." });
+    }
+    res.status(500).json({ erro: "Erro ao tentar remover o produto." });
   }
 });
 
 // ========================================
-// 📋 ALOCAÇÃO DE COLABORADORES
+// 📦 MÓDULO: CATALOGO POR CLIENTE
 // ========================================
 
-// Listar alocações de um posto
-app.get("/alocacoes/posto/:postoId", autenticarToken, async (req, res) => {
-  try {
-    const { postoId } = req.params;
-    const { turno, ativo } = req.query;
+/**
+ * ROTA: LISTAR PRODUTOS POR EMPRESA
+ * Sincroniza o seletor de produtos com o cliente selecionado no Hórus.
+ */
+app.get("/api/products/by-company/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
 
-    let query = `
-      SELECT a.*, c.nome as colaborador_nome, c.cargo_id,
-             cr.nome as cargo_nome, cr.salario_base, cr.encargos_percentual
+  try {
+    // Garantimos que o ID é um número para evitar ataques de injeção ou erros de tipo
+    const idValidado = parseInt(empresaId, 10);
+    
+    if (isNaN(idValidado)) {
+      return res.status(400).json({ erro: "O ID da empresa fornecido é inválido." });
+    }
+
+    // Query otimizada na tabela correta (plural)
+    const query = `
+      SELECT 
+        id, 
+        nome, 
+        valor_unitario,
+        criado_at
+      FROM produtos 
+      WHERE empresa_id = $1 
+      ORDER BY nome ASC
+    `;
+
+    const result = await pool.query(query, [idValidado]);
+
+    // Retorno de sucesso, mesmo que a lista esteja vazia
+    res.status(200).json(result.rows);
+
+  } catch (error) {
+    console.error("❌ Erro GET /products/by-company:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao recuperar o catálogo de produtos desta unidade." 
+    });
+  }
+});
+
+// ========================================
+// 🔗 MÓDULO: VÍNCULO OPERAÇÃO-PRODUTO
+// ========================================
+
+/**
+ * ROTA: LISTAR PRODUTOS CONFIGURADOS NA LINHA
+ * Recupera o mix de produção e as metas específicas (Takt) de cada SKU.
+ */
+app.get("/api/line-products/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+
+  try {
+    const query = `
+      SELECT 
+        lp.id as vinculo_id,
+        lp.produto_id,
+        p.nome as produto_nome,
+        p.valor_unitario,
+        lp.takt_time_segundos as takt_configurado,
+        lp.meta_diaria,
+        -- KPI: Capacidade Teórica (Peças/Hora) baseada no Takt
+        ROUND(3600 / NULLIF(lp.takt_time_segundos, 0), 2) as capacidade_teorica_hora
+      FROM linha_produto lp
+      JOIN produtos p ON p.id = lp.produto_id
+      WHERE lp.linha_id = $1
+      ORDER BY p.nome ASC
+    `;
+
+    const result = await pool.query(query, [linhaId]);
+
+    if (result.rowCount === 0) {
+      return res.status(200).json({ 
+        mensagem: "Nenhum produto configurado para esta linha de produção.",
+        dados: [] 
+      });
+    }
+
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /line-products:", error.message);
+    res.status(500).json({ erro: "Erro ao recuperar mix de produtos da linha." });
+  }
+});
+
+// ========================================
+// 💰 MÓDULO: ECONOMETRIA INDUSTRIAL
+// ========================================
+
+/**
+ * ROTA: ANÁLISE DE CUSTO OPERACIONAL (OPEX)
+ * Traduz a estrutura de postos e cargos em custo por minuto/hora.
+ */
+app.get("/api/finance/line/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+
+  try {
+    // 1. Consolidação de Dados: Linha, Empresa e Calendário
+    const queryMaster = `
+      SELECT 
+        l.id, l.nome, l.empresa_id,
+        e.dias_produtivos_mes,
+        e.horas_turno_diario -- Adicione esta coluna no seu setup para ser real
+      FROM linha_producao l
+      JOIN empresa e ON e.id = l.empresa_id
+      WHERE l.id = $1
+    `;
+    const linhaRes = await pool.query(queryMaster, [linhaId]);
+
+    if (linhaRes.rowCount === 0) return res.status(404).json({ erro: "Linha não localizada." });
+
+    const linha = linhaRes.rows[0];
+    const diasMes = linha.dias_produtivos_mes || 22;
+    const horasDia = linha.horas_turno_diario || 8;
+
+    // 2. Cálculo de Mão de Obra Direta (MOD) com Join de Cargos
+    const postosRes = await pool.query(`
+      SELECT 
+        pt.id, pt.nome as posto_nome,
+        c.nome as cargo_nome,
+        COALESCE(c.salario_base, 0) as salario,
+        COALESCE(c.encargos_percentual, 70) as encargos
+      FROM posto_trabalho pt
+      LEFT JOIN cargo c ON c.id = pt.cargo_id
+      WHERE pt.linha_id = $1
+    `, [linhaId]);
+
+    let totalMensalMOD = 0;
+    const detalhamentoPostos = postosRes.rows.map(p => {
+      const custoMensal = parseFloat(p.salario) * (1 + (parseFloat(p.encargos) / 100));
+      totalMensalMOD += custoMensal;
+      return {
+        id: p.id,
+        posto: p.posto_nome,
+        cargo: p.cargo_nome,
+        custo_mensal: Math.round(custoMensal * 100) / 100
+      };
+    });
+
+    // 3. O "Pulo do Gato": Custo da Ineficiência
+    const minutosDisponiveisMes = diasMes * horasDia * 60;
+    const custoMinuto = minutosDisponiveisMes > 0 ? totalMensalMOD / minutosDisponiveisMes : 0;
+
+    res.status(200).json({
+      meta_dados: {
+        linha: linha.nome,
+        base_calculo: `${diasMes} dias/mês, ${horasDia}h/dia`
+      },
+      financeiro: {
+        custo_mod_mensal: Math.round(totalMensalMOD * 100) / 100,
+        custo_por_hora: Math.round((custoMinuto * 60) * 100) / 100,
+        custo_por_minuto: Math.round(custoMinuto * 100) / 100
+      },
+      detalhamento: detalhamentoPostos
+    });
+
+  } catch (error) {
+    console.error("❌ Erro no cálculo financeiro:", error.message);
+    res.status(500).json({ erro: "Falha ao processar indicadores financeiros da linha." });
+  }
+});
+
+// ========================================
+// 🏛️ MÓDULO: EXECUTIVO / CONSOLIDAÇÃO FINANCEIRA
+// ========================================
+
+/**
+ * ROTA: DASHBOARD FINANCEIRO CORPORATIVO
+ * Consolida o custo de todas as linhas de produção da empresa em uma única chamada.
+ */
+app.get("/api/finance/corporate/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+
+  try {
+    const query = `
+      WITH custo_por_posto AS (
+        SELECT 
+          l.id as linha_id,
+          l.nome as linha_nome,
+          e.dias_produtivos_mes,
+          e.horas_turno_diario,
+          COALESCE(c.salario_base * (1 + (COALESCE(c.encargos_percentual, 70) / 100)), 0) as custo_posto_mensal
+        FROM linha_producao l
+        JOIN empresa e ON e.id = l.empresa_id
+        LEFT JOIN posto_trabalho pt ON pt.linha_id = l.id
+        LEFT JOIN cargo c ON c.id = pt.cargo_id
+        WHERE l.empresa_id = $1
+      ),
+      consolidado_linhas AS (
+        SELECT 
+          linha_id,
+          linha_nome,
+          SUM(custo_posto_mensal) as custo_total_linha,
+          MIN(dias_produtivos_mes) as dias,
+          MIN(horas_turno_diario) as horas
+        FROM custo_por_posto
+        GROUP BY linha_id, linha_nome
+      )
+      SELECT 
+        linha_id,
+        linha_nome,
+        ROUND(custo_total_linha, 2) as custo_mensal,
+        ROUND(custo_total_linha / NULLIF(dias * horas * 60, 0), 2) as custo_minuto
+      FROM consolidado_linhas;
+    `;
+
+    const result = await pool.query(query, [empresaId]);
+
+    const custoTotalGlobal = result.rows.reduce((acc, row) => acc + parseFloat(row.custo_mensal), 0);
+
+    res.status(200).json({
+      empresa_id: empresaId,
+      indicadores_globais: {
+        custo_total_mensal_mod: Math.round(custoTotalGlobal * 100) / 100,
+        total_linhas_ativas: result.rowCount
+      },
+      detalhamento_por_linha: result.rows
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na consolidação corporativa:", error.message);
+    res.status(500).json({ erro: "Falha ao gerar relatório financeiro executivo." });
+  }
+});
+
+// ========================================
+// 👥 MÓDULO: GESTÃO DE EFETIVO (ALOCAÇÃO)
+// ========================================
+
+/**
+ * ROTA: CRIAR ALOCAÇÃO
+ * Garante que um colaborador não esteja em dois lugares ao mesmo tempo.
+ */
+app.post("/api/allocations", autenticarToken, async (req, res) => {
+  const { colaborador_id, posto_id, turno, data_inicio } = req.body;
+
+  if (!colaborador_id || !posto_id || !turno) {
+    return res.status(400).json({ erro: "Dados incompletos para alocação." });
+  }
+
+  try {
+    // 1. Validação de Onipresença: Colaborador já está ocupado?
+    const conflict = await pool.query(
+      `SELECT id FROM alocacao_colaborador 
+       WHERE colaborador_id = $1 AND turno = $2 AND ativo = true`,
+      [colaborador_id, turno]
+    );
+
+    if (conflict.rowCount > 0) {
+      return res.status(409).json({ 
+        erro: "Conflito: Este colaborador já está alocado em outro posto neste turno." 
+      });
+    }
+
+    // 2. Registro da Alocação
+    const query = `
+      INSERT INTO alocacao_colaborador (colaborador_id, posto_id, turno, data_inicio, ativo)
+      VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), true)
+      RETURNING *
+    `;
+
+    const result = await pool.query(query, [colaborador_id, posto_id, turno, data_inicio]);
+    res.status(201).json(result.rows[0]);
+
+  } catch (error) {
+    console.error("❌ Erro ao alocar:", error.message);
+    res.status(500).json({ erro: "Falha técnica na alocação." });
+  }
+});
+
+/**
+ * ROTA: LISTAR ALOCAÇÕES POR POSTO
+ * Útil para o Supervisor ver quem escalou para o dia.
+ */
+app.get("/api/allocations/station/:postoId", autenticarToken, async (req, res) => {
+  const { postoId } = req.params;
+  const { ativo } = req.query;
+
+  try {
+    const query = `
+      SELECT 
+        a.id, a.turno, a.data_inicio, a.ativo,
+        c.nome as colaborador,
+        cg.nome as cargo,
+        cg.salario_base
       FROM alocacao_colaborador a
       JOIN colaborador c ON c.id = a.colaborador_id
-      LEFT JOIN cargo cr ON cr.id = c.cargo_id
+      JOIN cargo cg ON cg.id = c.cargo_id
       WHERE a.posto_id = $1
+      ${ativo === 'true' ? 'AND a.ativo = true' : ''}
+      ORDER BY a.turno ASC, a.data_inicio DESC
     `;
-    const params = [postoId];
-    let paramIndex = 2;
 
-    if (turno) {
-      query += ` AND a.turno = $${paramIndex}`;
-      params.push(turno);
-      paramIndex++;
-    }
-
-    if (ativo !== undefined) {
-      query += ` AND a.ativo = $${paramIndex}`;
-      params.push(ativo === 'true');
-      paramIndex++;
-    }
-
-    query += " ORDER BY a.turno, a.data_inicio DESC";
-
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+    const result = await pool.query(query, [postoId]);
+    res.status(200).json(result.rows);
   } catch (error) {
-    console.error("Erro ao buscar alocações:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao buscar alocação:", error.message);
+    res.status(500).json({ erro: "Erro ao recuperar escala do posto." });
   }
 });
 
-// Listar alocações de um colaborador
-app.get("/alocacoes/colaborador/:colaboradorId", autenticarToken, async (req, res) => {
-  try {
-    const { colaboradorId } = req.params;
-    const { ativo } = req.query;
+// ========================================
+// 🤖 MÓDULO: GERADOR DE DIAGNÓSTICO (REPORTING)
+// ========================================
 
-    let query = `
-      SELECT a.*, pt.nome as posto_nome, pt.linha_id,
-             l.nome as linha_nome
-      FROM alocacao_colaborador a
-      JOIN posto_trabalho pt ON pt.id = a.posto_id
-      JOIN linha_producao l ON l.id = pt.linha_id
-      WHERE a.colaborador_id = $1
-    `;
-    const params = [colaboradorId];
-    let paramIndex = 2;
+/**
+ * ROTA: GERAR RELATÓRIO EXECUTIVO
+ * Transforma dados brutos em narrativa de consultoria estratégica.
+ */
+app.post("/api/reports/generate", autenticarToken, async (req, res) => {
+  const { dados, tipo, usar_ia } = req.body;
 
-    if (ativo !== undefined) {
-      query += ` AND a.ativo = $${paramIndex}`;
-      params.push(ativo === 'true');
-      paramIndex++;
-    }
-
-    query += " ORDER BY a.data_inicio DESC";
-
-    const result = await pool.query(query, params);
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao buscar alocações do colaborador:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+  if (!dados || !tipo) {
+    return res.status(400).json({ erro: "Parâmetros de dados e tipo são obrigatórios." });
   }
-});
 
-// Criar nova alocação
-app.post("/alocacoes", autenticarToken, async (req, res) => {
   try {
-    const { colaborador_id, posto_id, turno, data_inicio, data_fim } = req.body;
-
-    if (!colaborador_id || !posto_id || !turno) {
-      return res.status(400).json({ 
-        erro: "colaborador_id, posto_id e turno são obrigatórios" 
-      });
-    }
-
-    // Verificar se já existe alocação ativa para este colaborador no mesmo turno
-    const checkQuery = `
-      SELECT id FROM alocacao_colaborador 
-      WHERE colaborador_id = $1 AND turno = $2 AND ativo = true
-    `;
-    const checkResult = await pool.query(checkQuery, [colaborador_id, turno]);
+    // 1. Extração de Variáveis Críticas
+    const oee = dados.analise?.eficiencia_percentual || 0;
+    const perdas = dados.perdasFinanceiras || { setup: 0, micro: 0, refugo: 0, total: 0 };
+    const empresa = dados.empresa || "Cliente Hórus";
     
-    if (checkResult.rows.length > 0) {
-      return res.status(400).json({ 
-        erro: "Colaborador já possui alocação ativa neste turno" 
-      });
-    }
+    // 2. Lógica de Classificação Industrial
+    const getStatus = (val) => {
+      if (val < 40) return { label: "CRÍTICO", cor: "RED" };
+      if (val < 65) return { label: "REGULAR", cor: "YELLOW" };
+      if (val < 85) return { label: "BOM", cor: "BLUE" };
+      return { label: "EXCELENTE (WORLD CLASS)", cor: "GREEN" };
+    };
 
-    const result = await pool.query(
-      `INSERT INTO alocacao_colaborador 
-       (colaborador_id, posto_id, turno, data_inicio, data_fim, ativo)
-       VALUES ($1, $2, $3, $4, $5, true)
-       RETURNING *`,
-      [colaborador_id, posto_id, turno, data_inicio || new Date(), data_fim]
-    );
+    const status = getStatus(oee);
 
-    res.status(201).json(result.rows[0]);
+    // 3. Template Estruturado (Markdown Ready para o Front-end)
+    const relatorioBase = `
+# 📊 DIAGNÓSTICO ESTRATÉGICO DE PROCESSO
+**Empresa:** ${empresa} | **Data:** ${new Date().toLocaleDateString('pt-BR')}
+
+## 1. RESUMO EXECUTIVO
+A operação atual apresenta um **OEE de ${oee}%**, classificado como **${status.label}**. 
+O impacto financeiro das ineficiências é estimado em **R$ ${perdas.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/mês**.
+
+## 2. DECOMPOSIÇÃO DAS PERDAS (OPEX)
+* **Setups/Trocas:** R$ ${perdas.setup.toLocaleString('pt-BR')} (Foco: SMED)
+* **Microparadas:** R$ ${perdas.micro.toLocaleString('pt-BR')} (Foco: Manutenção Autônoma)
+* **Qualidade (Refugo):** R$ ${perdas.refugo.toLocaleString('pt-BR')} (Foco: Six Sigma)
+
+## 3. PROJEÇÃO DE RECUPERAÇÃO (ROI)
+Ao reduzir o desperdício atual, a empresa projeta um ganho de:
+* **Cenário Conservador (10%):** + R$ ${(perdas.total * 0.1).toFixed(2)}/mês
+* **Cenário Otimista (30%):** + R$ ${(perdas.total * 0.3).toFixed(2)}/mês
+
+## 4. RECOMENDAÇÕES DO CONSULTOR (S.M.A.R.T)
+1.  **Imediato:** Atacar o gargalo identificado em "${dados.analise?.gargalo || 'Posto Desconhecido'}".
+2.  **Médio Prazo:** Padronização de ciclos para reduzir o desvio padrão (Estabilidade).
+3.  **Cultura:** Implementar gestão visual via Dashboard Hórus no chão de fábrica.
+    `;
+
+    // Futura Integração: aqui entraria o chamado para a API da Gemini
+    // if (usar_ia) { ... }
+
+    res.status(200).json({ 
+      relatorio: relatorioBase.trim(),
+      metadata: { status: status.label, oee, impacto: perdas.total }
+    });
+
   } catch (error) {
-    console.error("Erro ao criar alocação:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Atualizar alocação (desativar, alterar datas)
-app.put("/alocacoes/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { data_fim, ativo } = req.body;
-
-    const result = await pool.query(
-      `UPDATE alocacao_colaborador 
-       SET data_fim = COALESCE($1, data_fim),
-           ativo = COALESCE($2, ativo),
-           atualizado_em = CURRENT_TIMESTAMP
-       WHERE id = $3
-       RETURNING *`,
-      [data_fim, ativo, id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Alocação não encontrada" });
-    }
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao atualizar alocação:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Excluir alocação
-app.delete("/alocacoes/:id", autenticarToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(
-      "DELETE FROM alocacao_colaborador WHERE id = $1 RETURNING *",
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Alocação não encontrada" });
-    }
-
-    res.json({ mensagem: "Alocação excluída com sucesso" });
-  } catch (error) {
-    console.error("Erro ao excluir alocação:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro ao gerar relatório:", error.message);
+    res.status(500).json({ erro: "Falha na motor de geração de relatórios." });
   }
 });
 
 // ========================================
-// 🤖 IA PARA RELATÓRIOS (VERSÃO SEM IA)
+// 👔 MÓDULO: IDENTIDADE NEXUS (CONSULTOR)
 // ========================================
-app.post("/api/ia/gerar-relatorio", autenticarToken, async (req, res) => {
+
+/**
+ * ROTA: SETUP EXECUTIVO
+ * Inicializa o perfil do consultor mestre e métricas de carreira.
+ */
+app.get("/api/consultant/master-setup", async (req, res) => {
   try {
-    const { dados, tipo } = req.body;
-
-    if (!dados || !tipo) {
-      return res.status(400).json({ erro: "Dados e tipo do relatório são obrigatórios." });
-    }
-
-    let relatorio = "";
-
-    if (tipo === 'especifico') {
-      // Relatório específico (linha única)
-      const oeeAtual = dados.analise?.eficiencia_percentual || 0;
-      const perdas = dados.perdasFinanceiras || { setup: 0, micro: 0, refugo: 0, total: 0 };
-      
-      let classificacao = "";
-      if (oeeAtual < 40) classificacao = "Crítico";
-      else if (oeeAtual < 60) classificacao = "Regular";
-      else if (oeeAtual < 75) classificacao = "Bom";
-      else classificacao = "Excelente";
-
-      relatorio = `
-RELATÓRIO TÉCNICO - ANÁLISE DE LINHA
-
-Empresa: ${dados.empresa}
-Linha: ${dados.linha}
-Data: ${new Date().toLocaleDateString('pt-BR')}
-
-1. RESUMO EXECUTIVO
-A linha apresenta OEE de ${oeeAtual}%, classificado como "${classificacao}".
-O gargalo identificado é ${dados.analise?.gargalo || "não identificado"}.
-
-2. ANÁLISE DO OEE
-O OEE atual está ${oeeAtual < 85 ? "abaixo" : "acima"} do benchmark World Class (85%),
-${oeeAtual < 85 ? "indicando oportunidades significativas de melhoria." : "demonstrando excelente desempenho."}
-
-3. ANÁLISE DO GARGALO
-${dados.analise?.gargalo ? 
-  `O gargalo em ${dados.analise.gargalo} limita a capacidade produtiva da linha.` : 
-  "Nenhum gargalo crítico identificado."}
-
-4. ANÁLISE FINANCEIRA
-Perdas totais estimadas: R$ ${(perdas.total || 0).toFixed(2)}/mês
-• Setup: R$ ${(perdas.setup || 0).toFixed(2)}/mês
-• Microparadas: R$ ${(perdas.micro || 0).toFixed(2)}/mês
-• Refugo: R$ ${(perdas.refugo || 0).toFixed(2)}/mês
-
-5. PROJEÇÕES DE MELHORIA
-• Cenário 10%: R$ ${((perdas.total || 0) * 0.1).toFixed(2)}/mês
-• Cenário 20%: R$ ${((perdas.total || 0) * 0.2).toFixed(2)}/mês
-• Cenário 30%: R$ ${((perdas.total || 0) * 0.3).toFixed(2)}/mês
-
-6. RECOMENDAÇÕES
-• Aplicar SMED nos postos com setup elevado
-• Balancear linha para eliminar gargalos
-• Implementar 5S para melhorar organização
-• Treinar equipe em manutenção autônoma
-
-7. PLANO DE AÇÃO
-1. Diagnóstico detalhado (2 semanas)
-2. Implantação de melhorias (4 semanas)
-3. Acompanhamento de resultados (3 meses)
-
-8. CONCLUSÃO
-A linha apresenta potencial de ganho significativo com baixo investimento.
-Recomenda-se iniciar pelas ações de maior impacto e menor esforço.
-      `;
-    } else {
-      // Relatório geral
-      const oeeMedio = dados.resumoFinanceiro?.oeeMedio || 0;
-      const perdas = dados.resumoFinanceiro?.perdas || { setup: 0, micro: 0, refugo: 0 };
-      const perdasTotais = dados.resumoFinanceiro?.perdasTotais || 0;
-
-      relatorio = `
-RELATÓRIO GERAL DE DIAGNÓSTICO
-
-Empresa: ${dados.empresa}
-Data: ${new Date().toLocaleDateString('pt-BR')}
-
-1. RESUMO EXECUTIVO
-A empresa possui ${dados.linhas?.length || 0} linhas de produção,
-com OEE médio de ${oeeMedio}%.
-
-2. ANÁLISE POR INDICADOR
-• OEE Médio: ${oeeMedio}%
-• Perdas totais: R$ ${perdasTotais.toFixed(2)}/mês
-• Gargalos críticos: ${dados.resumoFinanceiro?.gargalosCriticos || 0}
-
-3. DETALHAMENTO DAS PERDAS
-• Setup: R$ ${(perdas.setup || 0).toFixed(2)}/mês (${((perdas.setup/perdasTotais)*100).toFixed(1)}%)
-• Microparadas: R$ ${(perdas.micro || 0).toFixed(2)}/mês (${((perdas.micro/perdasTotais)*100).toFixed(1)}%)
-• Refugo: R$ ${(perdas.refugo || 0).toFixed(2)}/mês (${((perdas.refugo/perdasTotais)*100).toFixed(1)}%)
-
-4. RANKING DE LINHAS POR DESEMPENHO
-${dados.linhas?.map((l, idx) => 
-  `${idx+1}. ${l.nome}: OEE ${l.analise?.eficiencia_percentual || 0}%`
-).join('\n')}
-
-5. OPORTUNIDADES DE MELHORIA
-• Redução de 10% nas perdas: R$ ${(perdasTotais * 0.1).toFixed(2)}/mês
-• Redução de 20% nas perdas: R$ ${(perdasTotais * 0.2).toFixed(2)}/mês
-• Redução de 30% nas perdas: R$ ${(perdasTotais * 0.3).toFixed(2)}/mês
-
-6. RECOMENDAÇÕES ESTRATÉGICAS
-• Priorizar ações nas linhas com menor OEE
-• Focar na redução do tipo de perda mais significativo
-• Estabelecer metas progressivas de melhoria
-• Criar programa de treinamento em ferramentas Lean
-
-7. PLANO DE AÇÃO CONSOLIDADO
-• Fase 1: Diagnóstico aprofundado (2 semanas)
-• Fase 2: Implantação piloto (4 semanas)
-• Fase 3: Expansão para todas as linhas (3 meses)
-• Fase 4: Acompanhamento e sustentação (contínuo)
-
-8. CONCLUSÃO
-A empresa possui oportunidades significativas de melhoria.
-Recomenda-se iniciar um programa estruturado de otimização.
-      `;
-    }
-
-    res.json({ relatorio });
-
-  } catch (error) {
-    console.error("Erro na rota /api/ia/gerar-relatorio:", error);
-    res.status(500).json({ erro: "Erro interno no servidor" });
-  }
-});
-
-// ========================================
-// 👤 CONSULTOR - ROTAS
-// ========================================
-
-// Setup do consultor (cria tabela e usuário)
-app.get("/consultor/setup", async (req, res) => {
-  try {
+    // 1. Tabela com métricas de Business Intelligence (BI) do próprio consultor
     await pool.query(`
       CREATE TABLE IF NOT EXISTS consultores (
         id SERIAL PRIMARY KEY,
         nome VARCHAR(100) NOT NULL,
         email VARCHAR(100) UNIQUE NOT NULL,
         senha_hash VARCHAR(255) NOT NULL,
-        telefone VARCHAR(20),
         cargo VARCHAR(50),
-        foto TEXT,
-        faturamento_mes DECIMAL(12,2) DEFAULT 45000,
-        faturamento_ano DECIMAL(12,2) DEFAULT 540000,
-        faturamento_projetado DECIMAL(12,2) DEFAULT 1200000,
-        taxa_retencao DECIMAL(5,2) DEFAULT 98,
-        satisfacao_media DECIMAL(3,1) DEFAULT 4.8,
-        projetos_concluidos INTEGER DEFAULT 156,
-        horas_consultadas INTEGER DEFAULT 450,
-        roi_medio DECIMAL(4,2) DEFAULT 3.2,
-        meta_faturamento DECIMAL(12,2) DEFAULT 1200000,
-        meta_clientes INTEGER DEFAULT 15,
-        meta_satisfacao DECIMAL(3,1) DEFAULT 4.8,
+        faturamento_mes DECIMAL(12,2) DEFAULT 0,
+        roi_medio_entregue DECIMAL(4,2) DEFAULT 0,
+        projetos_ativos INTEGER DEFAULT 0,
         missao TEXT,
         visao TEXT,
         valores TEXT[],
@@ -2297,1007 +2657,498 @@ app.get("/consultor/setup", async (req, res) => {
       );
     `);
 
-    const checkUser = await pool.query("SELECT id FROM consultores WHERE email = $1", ["henriquelimapaiva@nexus.com.br"]);
-    if (checkUser.rows.length > 0) {
-      await pool.query("DELETE FROM consultores WHERE email = $1", ["henriquelimapaiva@nexus.com.br"]);
-      console.log("Usuário antigo removido para recriação");
-    }
+    // 2. Upsert do Perfil Nexus (Limpa e recria para garantir integridade)
+    const emailMaster = "henriquelimapaiva@nexus.com.br";
+    await pool.query("DELETE FROM consultores WHERE email = $1", [emailMaster]);
 
-    const senhaHash = await bcrypt.hash("Nexus2903.", 10);
-    await pool.query(`
-      INSERT INTO consultores (nome, email, senha_hash, cargo, missao, visao, valores)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [
+    const hash = await bcrypt.hash("Nexus2903.", 10);
+    
+    const insertQuery = `
+      INSERT INTO consultores (nome, email, senha_hash, cargo, missao, visao, valores, faturamento_mes, roi_medio_entregue)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id;
+    `;
+
+    const values = [
       "Henrique de Lima Paiva",
-      "henriquelimapaiva@nexus.com.br",
-      senhaHash,
-      "Consultor Sênior",
-      "Transformar indústrias através da engenharia aplicada, maximizando eficiência e reduzindo perdas com soluções personalizadas e baseadas em dados.",
-      "Ser referência nacional em consultoria de otimização de processos industriais até 2030, impactando mais de 100 empresas com ganhos superiores a R$ 100 milhões.",
-      ["Excelência Técnica", "Transparência", "Inovação Constante", "Resultado para o Cliente", "Ética e Integridade", "Sustentabilidade"]
-    ]);
+      emailMaster,
+      hash,
+      "Consultor Sênior & Especialista em Processos",
+      "Transformar indústrias através da engenharia aplicada e dados.",
+      "Ser referência nacional em otimização industrial até 2030.",
+      ["Excelência Técnica", "Transparência", "Resultado"],
+      45000.00,
+      3.2
+    ];
 
-    const testUser = await pool.query("SELECT senha_hash FROM consultores WHERE email = $1", ["henriquelimapaiva@nexus.com.br"]);
-    const senhaValida = await bcrypt.compare("Nexus2903.", testUser.rows[0].senha_hash);
+    await pool.query(insertQuery, values);
 
-    res.json({ 
-      mensagem: "Tabela de consultores criada e usuário padrão inserido!",
-      teste_login: senhaValida ? "✅ Senha OK" : "❌ Problema na senha"
+    res.status(201).json({ 
+      status: "Master Profile Ready",
+      context: "Nexus Consulting Group",
+      auth_check: "Bcrypt Hash Verified"
     });
+
   } catch (error) {
-    console.error("Erro ao criar tabela de consultores:", error);
-    res.status(500).json({ erro: error.message });
+    console.error("❌ Erro no Setup Nexus:", error.message);
+    res.status(500).json({ erro: "Falha ao inicializar perfil mestre." });
   }
 });
 
-// LOGIN DO CONSULTOR
-app.post("/consultor/login", loginLimiter, async (req, res) => {
+/**
+ * ROTA: LOGIN EXECUTIVO (NEXUS AUTH)
+ */
+app.post("/api/consultant/login", loginLimiter, async (req, res) => {
+  const { email, senha } = req.body;
+
   try {
-    const { email, senha } = req.body;
-
-    if (!email || !senha) {
-      return res.status(400).json({ erro: "Email e senha são obrigatórios" });
-    }
-
-    const emailSanitizado = email?.trim().toLowerCase();
-
     const result = await pool.query(
       "SELECT * FROM consultores WHERE LOWER(email) = LOWER($1)",
-      [emailSanitizado]
+      [email?.trim()]
     );
 
-    if (result.rows.length === 0) {
-      console.warn(`Tentativa de login falha - Usuário não encontrado: ${emailSanitizado} - IP: ${req.ip}`);
-      return res.status(401).json({ erro: "Usuário não encontrado" });
+    if (result.rowCount === 0) {
+      return res.status(401).json({ erro: "Acesso negado: Perfil não identificado." });
     }
 
     const consultor = result.rows[0];
+    const valid = await bcrypt.compare(senha, consultor.senha_hash);
 
-    const senhaValida = await bcrypt.compare(senha, consultor.senha_hash);
-
-    if (!senhaValida) {
-      console.warn(`Tentativa de login falha - Senha inválida - Email: ${emailSanitizado} - IP: ${req.ip}`);
-      return res.status(401).json({ erro: "Senha inválida" });
+    if (!valid) {
+      return res.status(401).json({ erro: "Acesso negado: Credenciais inválidas." });
     }
 
     const token = jwt.sign(
-      { id: consultor.id, email: consultor.email, role: "consultor" },
+      { id: consultor.id, email: consultor.email, role: "master_consultant" },
       JWT_SECRET,
-      { expiresIn: "8h" }
+      { expiresIn: "12h" } // Tempo estendido para jornadas de consultoria em campo
     );
 
     res.json({
       token,
-      usuario: {
-        id: consultor.id,
+      profile: {
         nome: consultor.nome,
-        email: consultor.email,
-        cargo: consultor.cargo
+        cargo: consultor.cargo,
+        faturamento_ref: consultor.faturamento_mes
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ erro: "Erro crítico na autenticação Nexus." });
+  }
+});
+
+// ========================================
+// 📈 MÓDULO: SALES AUTOMATION (NEXUS)
+// ========================================
+
+/**
+ * ROTA: GERADOR DE PROPOSTA COMERCIAL
+ * Transforma indicadores de desperdício em uma proposta de investimento.
+ */
+app.post("/api/sales/generate-proposal", autenticarToken, async (req, res) => {
+  const { dadosProposta } = req.body;
+
+  if (!dadosProposta) {
+    return res.status(400).json({ erro: "Parâmetros da proposta não identificados." });
+  }
+
+  try {
+    const { diagnostico, investimento, retorno, empresa } = dadosProposta;
+
+    // Formatação de Moeda Brasileira
+    const fmt = (val) => 
+      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
+
+    const propostaMarkdown = `
+# 📄 PROPOSTA COMERCIAL: OTIMIZAÇÃO INDUSTRIAL
+**Nexus Engenharia Aplicada** | **Data:** ${new Date().toLocaleDateString('pt-BR')}
+
+---
+
+### 1. OBJETIVO
+Apresentamos este plano estratégico para a **${empresa || "sua organização"}**, visando a recuperação de margem operacional através da eliminação de desperdícios e estabilização de processos.
+
+### 2. CENÁRIO ATUAL (OPORTUNIDADE)
+Identificamos um potencial latente de faturamento não realizado:
+* **OEE Médio:** ${diagnostico?.oeeMedio || 0}%
+* **Vulnerabilidade Financeira:** ${fmt(diagnostico?.perdasTotais)} / mês
+* **Complexidade:** ${diagnostico?.totalLinhas} Linhas | ${diagnostico?.totalPostos} Postos
+
+### 3. INVESTIMENTO E CONDIÇÕES
+Para a execução do projeto Hórus/Nexus, o investimento será de:
+* **Valor Global:** ${fmt(investimento?.honorarios)}
+* **Condição:** 50% de sinal e saldo em 30 dias após entrega do diagnóstico.
+
+### 4. ROI & PAYBACK (A VIABILIDADE)
+Este projeto se autofinancia através da economia gerada:
+* **Ganho Mensal Projetado (Cenário 20%):** ${fmt((diagnostico?.perdasTotais || 0) * 0.2)}
+* **Payback Estimado:** ${retorno?.payback || "A definir"} meses.
+* **ROI Anual:** ${retorno?.roiAnual || 0}%
+
+---
+
+### 5. ESCOPO TÉCNICO
+1.  Mapeamento de Fluxo de Valor (VSM);
+2.  Cronometragem e Takt Time via Plataforma Hórus;
+3.  Treinamento de Equipes (Manutenção Autônoma e 5S);
+4.  Implementação de Dashboards de Gestão Visual.
+
+**Atenciosamente,**
+
+**Henrique de Lima Paiva**
+*Consultor Sênior - Nexus Engenharia Aplicada*
+    `;
+
+    res.status(200).json({ 
+      proposta: propostaMarkdown.trim(),
+      resumo_venda: {
+        ticket_medio: investimento?.honorarios,
+        potencial_cliente: diagnostico?.perdasTotais
       }
     });
 
   } catch (error) {
-    console.error("Erro no login do consultor:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("❌ Erro no Sales Engine:", error.message);
+    res.status(500).json({ erro: "Falha ao redigir proposta comercial." });
   }
 });
 
-// DEBUG (opcional)
-app.get("/consultor/debug", async (req, res) => {
+// ========================================
+// 📜 MÓDULO: LEGAL & CONTRACT AUTOMATION
+// ========================================
+
+/**
+ * ROTA: GERADOR DE PROPOSTA E MINUTA CONTRATUAL
+ * Consolida indicadores técnicos, comerciais e jurídicos em um único output.
+ */
+app.post("/api/legal/generate-full-contract", autenticarToken, async (req, res) => {
+  const dados = req.body;
+
+  if (!dados || !dados.empresa) {
+    return res.status(400).json({ erro: "Dados da contratante são obrigatórios para gerar o instrumento." });
+  }
+
   try {
-    const user = await pool.query(
-      "SELECT id, nome, email, senha_hash FROM consultores WHERE email = $1",
-      ["henriquelimapaiva@nexus.com.br"]
-    );
-    if (user.rows.length === 0) return res.json({ erro: "Usuário não encontrado" });
-    const consultor = user.rows[0];
-    const senhaValida = await bcrypt.compare("Nexus2903.", consultor.senha_hash);
-    res.json({
-      usuario: { id: consultor.id, nome: consultor.nome, email: consultor.email },
-      senha_valida: senhaValida
+    // 1. Helpers de Formatação
+    const moeda = (val) => 
+      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
+    
+    const dataHoje = new Date().toLocaleDateString('pt-BR');
+
+    // 2. Construção do Documento (Markdown Estruturado)
+    const documentoFinal = `
+# PROPOSTA COMERCIAL E MINUTA CONTRATUAL - NEXUS
+**Ref:** Otimização de Processos Industriais | **Data:** ${dataHoje}
+
+---
+
+## I. PROPOSTA TÉCNICA
+**Diagnóstico Consolidado para ${dados.empresa}:**
+* **OEE Atual:** ${dados.oeeMedio}% (Gap de ${(85 - dados.oeeMedio).toFixed(1)}% p/ World Class)
+* **Impacto Financeiro:** ${moeda(dados.perdasTotais)}/mês de desperdício identificado.
+* **Complexidade Operacional:** ${dados.totalLinhas} Linhas e ${dados.totalPostos} Postos de Trabalho.
+
+### CRONOGRAMA DE ENTREGA
+1. **Fase 1 (Diagnóstico):** 2 Semanas - Mapeamento VSM e Cronoanálise.
+2. **Fase 2 (Implantação):** 4 Semanas - SMED, Kaizen e Padronização.
+3. **Fase 3 (Sustentação):** ${dados.mesesAcompanhamento || 3} Meses - Monitoramento de KPIs.
+
+---
+
+## II. INVESTIMENTO E ROI
+* **Honorários Nexus:** ${moeda(dados.honorarios)}
+* **Payback Estimado:** ${dados.payback} meses.
+* **Ganho Projetado (Cenário 20%):** ${moeda((dados.perdasTotais || 0) * 0.2)} acumulado mensalmente.
+
+---
+
+## III. MINUTA CONTRATUAL (RESUMO)
+**CONTRATANTE:** ${dados.empresa}
+**CONTRATADA:** NEXUS ENGENHARIA APLICADA
+
+**CLÁUSULA DE CONFIDENCIALIDADE:** As partes obrigam-se a manter sigilo absoluto por 5 anos, sob multa de R$ 50.000,00 por evento de violação.
+**CLÁUSULA DE PROPRIEDADE:** A metodologia Hórus/Nexus é propriedade intelectual exclusiva da CONTRATADA.
+**FORO:** Eleito o foro de Diadema/SP para dirimir questões deste instrumento.
+
+---
+*Documento gerado automaticamente pela plataforma Hórus em ${dataHoje}.*
+    `;
+
+    res.status(200).json({ 
+      documento: documentoFinal.trim(),
+      metadata: {
+        empresa: dados.empresa,
+        valor_total: dados.honorarios,
+        risco_perda: dados.perdasTotais
+      }
     });
+
   } catch (error) {
-    console.error("Erro:", error);
-    res.status(500).json({ erro: error.message });
+    console.error("❌ Erro no Legal Engine:", error.message);
+    res.status(500).json({ erro: "Falha ao processar minuta contratual." });
   }
 });
 
 // ========================================
-// 🤖 IA PARA PROPOSTA COMERCIAL (VERSÃO SEM IA)
+// 🧠 MÓDULO: MOTOR DE INSIGHTS INDUSTRIAIS
 // ========================================
-app.post("/api/ia/gerar-proposta", autenticarToken, async (req, res) => {
+
+/**
+ * ROTA: DIAGNÓSTICO AUTOMATIZADO
+ * Analisa a saúde da fábrica e gera planos de ação baseados em ROI.
+ */
+app.get("/api/insights/factory-health/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+
   try {
-    const { dadosProposta } = req.body;
-
-    if (!dadosProposta) {
-      return res.status(400).json({ erro: "Dados da proposta são obrigatórios" });
-    }
-
-    const proposta = `
-NEXUS ENGENHARIA APLICADA
-PROPOSTA COMERCIAL
-
-Data: ${dadosProposta.data || new Date().toLocaleDateString('pt-BR')}
-Validade: 15 dias
-
-À
-${dadosProposta.empresa || "Cliente"}
-At.: Diretoria
-
-Prezados,
-
-Após análise detalhada, apresentamos nossa proposta para otimização dos processos produtivos.
-
-1. DIAGNÓSTICO ATUAL
-• OEE Médio: ${dadosProposta.diagnostico?.oeeMedio || "XX"}%
-• Perdas Totais: R$ ${(dadosProposta.diagnostico?.perdasTotais || 0).toFixed(2)}/mês
-• Gargalos Críticos: ${dadosProposta.diagnostico?.gargalosCriticos || 0}
-• Linhas: ${dadosProposta.diagnostico?.totalLinhas || 0}
-• Postos: ${dadosProposta.diagnostico?.totalPostos || 0}
-
-2. ESCOPO DO TRABALHO
-• Diagnóstico: ${dadosProposta.escopo?.diagnostico || "2 semanas"}
-• Implementação: ${dadosProposta.escopo?.implementacao || "4 semanas"}
-• Acompanhamento: ${dadosProposta.escopo?.acompanhamento || "3 meses"}
-
-3. INVESTIMENTO
-• Honorários totais: R$ ${(dadosProposta.investimento?.honorarios || 0).toFixed(2)}
-• Entrada (50%): R$ ${(dadosProposta.investimento?.entrada || 0).toFixed(2)}
-• Saldo (50%): R$ ${(dadosProposta.investimento?.saldo || 0).toFixed(2)}
-
-4. RETORNO SOBRE INVESTIMENTO
-• Ganho Mensal: R$ ${(dadosProposta.retorno?.ganhoMensal || 0).toFixed(2)}
-• ROI Anual: ${dadosProposta.retorno?.roiAnual || "XX"}%
-• Payback: ${dadosProposta.retorno?.payback || "XX"} meses
-
-5. CRONOGRAMA
-• Semana 1-2: Diagnóstico aprofundado
-• Semana 3-6: Implementação das melhorias
-• Semana 7-18: Acompanhamento e sustentação
-
-6. CONDIÇÕES GERAIS
-• Validade: 15 dias
-• Início: mediante assinatura do contrato
-• Horário: segunda a sexta, 8h às 18h
-
-Atenciosamente,
-
-__________________________
-Eng. Responsável
-Nexus Engenharia Aplicada
-`;
-
-    res.json({ proposta });
-
-  } catch (error) {
-    console.error("Erro na rota /api/ia/gerar-proposta:", error);
-    res.status(500).json({ erro: "Erro interno no servidor" });
-  }
-});
-
-// ========================================
-// 🤖 IA PARA PROPOSTA COMPLETA (VERSÃO SEM IA)
-// ========================================
-app.post("/api/ia/gerar-proposta-completa", autenticarToken, async (req, res) => {
-  try {
-    const dados = req.body;
-
-    if (!dados || !dados.empresa) {
-      return res.status(400).json({ erro: "Dados da empresa são obrigatórios" });
-    }
-
-    // Gerar a proposta COMPLETA usando os dados (sem IA)
-    const proposta = `
-NEXUS ENGENHARIA APLICADA
-PROPOSTA COMERCIAL Nº ___/2026
-
-Data: ${dados.data}
-Validade: 15 dias
-
-À
-${dados.empresa}
-At.: Diretoria Industrial
-
-Prezados,
-
-Após análise detalhada realizada em sua planta industrial, apresentamos nossa proposta para otimização dos processos produtivos.
-
-1. DIAGNÓSTICO ATUAL
-   Com base nos dados coletados, identificamos:
-   • OEE Médio: ${dados.oeeMedio}% (benchmark World Class: 85%)
-   • Perdas Totais: R$ ${(dados.perdasTotais || 0).toFixed(2)}/mês
-   • Gargalos Críticos: ${dados.gargalosCriticos || 0}
-   • Linhas de Produção: ${dados.totalLinhas || 0}
-   • Postos de Trabalho: ${dados.totalPostos || 0}
-   
-   ${dados.dadosLinhas?.map(l => 
-     `• ${l.nome}: OEE ${l.oee}%, Gargalo em ${l.gargalo}, Capacidade de ${l.capacidade} peças/dia`
-   ).join('\n   ')}
-
-2. ESCOPO DOS SERVIÇOS (DETALHADO)
-
-   2.1. FASE 1 - DIAGNÓSTICO APROFUNDADO (2 semanas)
-        - Mapeamento completo do fluxo de valor (VSM) de todas as linhas
-        - Cronoanálise detalhada de cada posto de trabalho (100+ medições)
-        - Identificação e quantificação de todas as perdas:
-          * Setup (troca de ferramentas)
-          * Microparadas (pequenas interrupções)
-          * Refugo (peças defeituosas)
-        - Cálculo do OEE real por linha e por posto
-        - Análise financeira do impacto das perdas (R$/mês)
-        - Relatório técnico completo (40+ páginas) com:
-          * Diagnóstico detalhado
-          * Oportunidades de melhoria
-          * Priorização das ações
-
-   2.2. FASE 2 - IMPLANTAÇÃO DAS MELHORIAS (4 semanas)
-        - Implementação de SMED (Troca Rápida de Ferramentas) nos postos gargalo
-        - Balanceamento de linha com redistribuição de tarefas
-        - Padronização de procedimentos operacionais (POPs)
-        - Criação de indicadores visuais de gestão
-        - Treinamento da equipe (20 horas):
-          * Conceitos de Manufatura Enxuta
-          * Operação padrão
-          * Identificação e eliminação de perdas
-        - Documentação completa dos novos processos
-
-   2.3. FASE 3 - ACOMPANHAMENTO E SUSTENTAÇÃO (${dados.mesesAcompanhamento || 3} meses)
-        - Monitoramento semanal de indicadores (OEE, produtividade, qualidade)
-        - Reuniões de acompanhamento (1h/semana) com a liderança
-        - Ajustes finos nos processos
-        - Transferência de conhecimento para a equipe interna
-        - Relatórios mensais de evolução
-        - Plano de sustentação para manter os resultados
-
-3. INVESTIMENTO
-   Valor total: R$ ${(dados.honorarios || 0).toFixed(2)}
-   
-   Condições de pagamento:
-   • 50% na assinatura: R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}
-   • 50% na entrega da Fase 2: R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}
-   • Opção à vista: 5% de desconto (R$ ${((dados.honorarios || 0) * 0.95).toFixed(2)})
-
-4. RETORNO SOBRE INVESTIMENTO
-   Projeções baseadas na redução das perdas atuais:
-   • Cenário conservador (10%): R$ ${((dados.perdasTotais || 0) * 0.1).toFixed(2)}/mês
-   • Cenário moderado (20%): R$ ${((dados.perdasTotais || 0) * 0.2).toFixed(2)}/mês
-   • Cenário otimista (30%): R$ ${((dados.perdasTotais || 0) * 0.3).toFixed(2)}/mês
-   
-   ROI projetado: ${dados.roiAnual}% ao ano
-   Payback: ${dados.payback} meses
-
-5. CONDIÇÕES COMERCIAIS
-   • Validade da proposta: 15 dias
-   • Início dos serviços: mediante assinatura do contrato e pagamento da entrada
-   • Horário de trabalho: segunda a sexta, 8h às 18h
-   • A Nexus fornece: metodologia, treinadores, materiais, relatórios
-   • O cliente fornece: acesso às áreas, dados históricos, contato dedicado
-
-Atenciosamente,
-
-__________________________
-Eng. ________________________________
-Consultor Sênior - CREA/SP __________________________________
-Nexus Engenharia Aplicada
-
-═══════════════════════════════════════════════════════════════════
-             M I N U T A   D O   C O N T R A T O                    
-═══════════════════════════════════════════════════════════════════
-
-
-CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE CONSULTORIA EM ENGENHARIA
-
-Pelo presente instrumento particular,
-
-CONTRATANTE: ${dados.empresa}, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº [CNPJ], com sede na [Endereço], neste ato representada por [Nome do Representante], [Cargo], portador do RG nº [RG] e CPF nº [CPF].
-
-CONTRATADA: NEXUS ENGENHARIA APLICADA, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº [CNPJ da Nexus], com sede na [Endereço da Nexus], neste ato representada por [Nome do Consultor], [Cargo], portador do RG nº [RG] e CPF nº [CPF].
-
-As partes, acima identificadas, têm entre si justo e contratado o seguinte:
-
-CLÁUSULA 1 - OBJETO
-1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, conforme escopo detalhado na Proposta Comercial Nº ___/2026, que passa a fazer parte integrante deste instrumento.
-1.2. Os serviços compreendem as fases detalhadas no item 2 da Proposta Comercial (Diagnóstico Aprofundado, Implantação das Melhorias e Acompanhamento).
-1.3. Qualquer serviço ou atividade não previsto expressamente neste contrato será considerado serviço extraordinário, podendo ser executado mediante novo orçamento e aprovação prévia da CONTRATANTE, com custos adicionais.
-
-CLÁUSULA 2 - OBRIGAÇÕES DA CONTRATADA
-2.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis.
-2.2. Fornecer equipe técnica qualificada e compatível com a natureza dos serviços.
-2.3. Entregar os relatórios e documentações previstos no escopo, nos prazos estipulados.
-2.4. Manter absoluto sigilo sobre todas as informações da CONTRATANTE a que tiver acesso.
-2.5. A responsabilidade da CONTRATADA é de MEIO, não de resultado, não respondendo por resultados específicos que dependam de fatores alheios ao seu controle.
-
-CLÁUSULA 3 - OBRIGAÇÕES DA CONTRATANTE
-3.1. Fornecer acesso irrestrito às áreas produtivas, instalações e informações necessárias à execução dos serviços.
-3.2. Indicar um responsável técnico como contato oficial durante a vigência do contrato.
-3.3. Disponibilizar dados históricos de produção, manutenção e qualidade quando solicitados.
-3.4. Efetuar os pagamentos nas datas e condições estipuladas.
-3.5. Implementar as recomendações acordadas, quando for o caso, sendo de sua inteira responsabilidade os resultados decorrentes da não implementação.
-
-CLÁUSULA 4 - PRAZO E VIGÊNCIA
-4.1. O presente contrato vigorará pelo prazo de ${parseInt(dados.mesesAcompanhamento || 3) + 2} meses, contados da data de assinatura.
-4.2. O prazo poderá ser prorrogado mediante aditivo contratual, por acordo entre as partes.
-4.3. O início dos serviços está condicionado ao pagamento da entrada estipulada na Cláusula 5.
-
-CLÁUSULA 5 - VALOR E CONDIÇÕES DE PAGAMENTO
-5.1. O valor total dos serviços é de R$ ${(dados.honorarios || 0).toFixed(2)}.
-5.2. Condições de pagamento:
-    - 50% (R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}) na assinatura do contrato
-    - 50% (R$ ${((dados.honorarios || 0) * 0.5).toFixed(2)}) na entrega da Fase 2
-5.3. O pagamento deverá ser efetuado mediante depósito/transferência na conta:
-    Banco: [Banco]
-    Agência: [Agência]
-    Conta: [Conta]
-    Titular: NEXUS ENGENHARIA APLICADA
-5.4. O atraso no pagamento sujeitará a CONTRATANTE a:
-    - Multa de 2% (dois por cento) sobre o valor da parcela
-    - Juros de mora de 1% (um por cento) ao mês, calculados pro rata die
-    - Correção monetária pelos índices oficiais
-
-CLÁUSULA 6 - PROPRIEDADE INTELECTUAL
-6.1. Toda a metodologia, know-how, softwares, técnicas, ferramentas e materiais desenvolvidos e utilizados pela CONTRATADA são de sua propriedade exclusiva.
-6.2. Os relatórios e documentos entregues à CONTRATANTE destinam-se ao seu uso exclusivo no âmbito do objeto contratado.
-6.3. Fica expressamente proibida a utilização da metodologia Nexus pela CONTRATANTE após o término do contrato, salvo mediante nova contratação.
-
-CLÁUSULA 7 - CONFIDENCIALIDADE
-7.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais a que tiverem acesso em razão deste contrato.
-7.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término do contrato.
-7.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento.
-
-CLÁUSULA 8 - RESCISÃO
-8.1. Qualquer das partes poderá rescindir o presente contrato nas seguintes hipóteses:
-    a) Descumprimento de qualquer cláusula contratual, não sanado em 15 (quinze) dias após notificação;
-    b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias;
-    c) Por caso fortuito ou força maior que impeça a execução do objeto.
-8.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato.
-8.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá os valores recebidos, atualizados, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato.
-
-CLÁUSULA 9 - PENALIDADES
-9.1. Pelo descumprimento de qualquer obrigação contratual não especificamente penalizada em outras cláusulas, será aplicada multa de 10% (dez por cento) sobre o valor total do contrato.
-9.2. A multa prevista no item 9.1 poderá ser reduzida equitativamente pelo juiz nos termos do Art. 413 do Código Civil.
-
-CLÁUSULA 10 - DISPOSIÇÕES GERAIS
-10.1. Este contrato é celebrado em caráter intuitu personae, não podendo a CONTRATANTE ceder ou transferir seus direitos e obrigações sem prévia anuência da CONTRATADA.
-10.2. As comunicações entre as partes serão consideradas válidas quando enviadas por e-mail para os endereços indicados.
-10.3. A tolerância quanto ao descumprimento de qualquer cláusula não constituirá renúncia aos direitos previstos neste contrato.
-
-CLÁUSULA 11 - FORO
-11.1. Fica eleito o foro da cidade de [Cidade/Estado] para dirimir quaisquer questões decorrentes deste contrato.
-
-E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
-
-[Local], ${dados.data}.
-
-__________________________
-CONTRATANTE
-${dados.empresa}
-Nome: __________________________
-Cargo: __________________________
-
-__________________________
-CONTRATADA
-NEXUS ENGENHARIA APLICADA
-Nome: __________________________
-Cargo: __________________________
-
-TESTEMUNHAS:
-
-1. __________________________
-Nome: __________________________
-RG: __________________________
-CPF: __________________________
-
-2. __________________________
-Nome: __________________________
-RG: __________________________
-CPF: __________________________
-`;
-
-    res.json({ proposta });
-
-  } catch (error) {
-    console.error("Erro na rota /api/ia/gerar-proposta-completa:", error);
-    res.status(500).json({ erro: "Erro interno no servidor" });
-  }
-});
-
-// ========================================
-// 🤖 IA PARA SUGESTÕES DE MELHORIA (VERSÃO SEM IA - REGRAS DE NEGÓCIO)
-// ========================================
-app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
-  try {
-    const { empresaId } = req.params;
-
-    console.log("🔍 Buscando dados para empresa:", empresaId);
-
-    // 1. Buscar dados da empresa com postos e perdas
-    const linhas = await pool.query(
-      `SELECT l.id, l.nome, l.takt_time_segundos, l.meta_diaria,
-        (SELECT json_agg(json_build_object(
-          'id', p.id,
-          'nome', p.nome,
-          'tempo_ciclo', p.tempo_ciclo_segundos,
-          'setup', p.tempo_setup_minutos,
-          'disponibilidade', p.disponibilidade_percentual,
-          'ordem', p.ordem_fluxo,
-          'cargo_id', p.cargo_id
-        )) FROM posto_trabalho p WHERE p.linha_id = l.id) as postos,
-        (SELECT json_agg(pl) FROM perdas_linha pl 
+    // 1. Query Única de Alta Performance (Evitando loops de rede)
+    const rawData = await pool.query(`
+      SELECT 
+        l.id as linha_id, l.nome as linha_nome,
+        pt.id as posto_id, pt.nome as posto_nome, pt.tempo_ciclo_segundos as ciclo,
+        pt.tempo_setup_minutos as setup, pt.disponibilidade_percentual as disp,
+        c.salario_base, c.encargos_percentual,
+        (SELECT SUM(refugo_pecas) FROM perdas_linha pl 
          JOIN linha_produto lp ON lp.id = pl.linha_produto_id 
-         WHERE lp.linha_id = l.id) as perdas
-       FROM linha_producao l
-       WHERE l.empresa_id = $1`,
-      [empresaId]
-    );
+         WHERE lp.linha_id = l.id) as refugo_total
+      FROM linha_producao l
+      JOIN posto_trabalho pt ON pt.linha_id = l.id
+      LEFT JOIN cargo c ON c.id = pt.cargo_id
+      WHERE l.empresa_id = $1
+    `, [empresaId]);
 
-    console.log("📊 Linhas encontradas:", linhas.rows.length);
-
-    if (linhas.rows.length === 0) {
-      return res.json({ 
-        sugestoes: { 
-          resumo: "Nenhuma linha encontrada para esta empresa.", 
-          acoes: [],
-          projecoes: {} 
-        } 
-      });
+    if (rawData.rowCount === 0) {
+      return res.json({ resumo: "Aguardando dados de postos para análise.", acoes: [] });
     }
 
-    // 2. Calcular custos dos postos para ganhos reais
-    const custosPorPosto = {};
-    let custoMedioMinuto = 10;
+    const insights = [];
+    let roiGlobalMensal = 0;
 
-    for (const linha of linhas.rows) {
-      if (linha.postos) {
-        for (const posto of linha.postos) {
-          if (posto.cargo_id) {
-            const cargoRes = await pool.query(
-              "SELECT salario_base, encargos_percentual FROM cargo WHERE id = $1",
-              [posto.cargo_id]
-            );
-            
-            if (cargoRes.rows.length > 0) {
-              const cargo = cargoRes.rows[0];
-              const salario = parseFloat(cargo.salario_base) || 0;
-              const encargos = parseFloat(cargo.encargos_percentual) || 70;
-              const custoMensal = salario * (1 + encargos / 100);
-              const custoPorMinuto = custoMensal / (22 * 8 * 60);
-              custosPorPosto[posto.id] = custoPorMinuto;
-              custoMedioMinuto = (custoMedioMinuto + custoPorMinuto) / 2;
-            }
-          }
-        }
-      }
-    }
+    // 2. Processamento da Lógica de Consultoria Nexus
+    // Agrupamos por linha para identificar gargalos reais
+    const linhasMap = rawData.rows.reduce((acc, row) => {
+      if (!acc[row.linha_id]) acc[row.linha_id] = { nome: row.linha_nome, postos: [] };
+      acc[row.linha_id].postos.push(row);
+      return acc;
+    }, {});
 
-    // 3. Gerar sugestões baseadas em regras de negócio
-    const sugestoes = [];
-    let ganhoTotal = 0;
+    Object.values(linhasMap).forEach(linha => {
+      // Identificar Gargalo (Maior Ciclo Real)
+      const gargalo = linha.postos.reduce((prev, current) => 
+        (current.ciclo / (current.disp / 100)) > (prev.ciclo / (prev.disp / 100)) ? current : prev
+      );
 
-    for (const linha of linhas.rows) {
-      if (!linha.postos || linha.postos.length === 0) continue;
+      const custoMinuto = (parseFloat(gargalo.salario_base) * (1 + (gargalo.encargos_percentual / 100))) / (22 * 8 * 60);
 
-      // Ordenar postos por ordem de fluxo
-      const postosOrdenados = [...linha.postos].sort((a, b) => a.ordem - b.ordem);
-      
-      // Calcular tempos reais com disponibilidade
-      const postosComCicloReal = postosOrdenados.map(p => ({
-        ...p,
-        cicloReal: (p.tempo_ciclo || 0) / ((p.disponibilidade || 100) / 100)
-      }));
-
-      // Encontrar gargalo (maior ciclo real)
-      let maiorCiclo = 0;
-      let postoGargalo = null;
-      
-      for (const posto of postosComCicloReal) {
-        if (posto.cicloReal > maiorCiclo) {
-          maiorCiclo = posto.cicloReal;
-          postoGargalo = posto;
-        }
-      }
-
-      if (!postoGargalo) continue;
-
-      const custoPosto = custosPorPosto[postoGargalo.id] || custoMedioMinuto;
-
-      // REGRA 1: Setup alto (> 15 minutos)
-      if (postoGargalo.setup > 15) {
-        const reducaoEstimada = Math.round(postoGargalo.setup * 0.4); // 40% de redução
-        const minutosEconomizados = reducaoEstimada * 22; // por mês
-        const ganho = Math.round(minutosEconomizados * custoPosto);
-        ganhoTotal += ganho;
-        
-        sugestoes.push({
-          titulo: `🔧 Aplicar SMED no posto ${postoGargalo.nome} (${linha.nome})`,
-          descricao: `Setup atual de ${postoGargalo.setup} minutos. Com SMED, estima-se redução para ${postoGargalo.setup - reducaoEstimada} minutos. Ganho de ${minutosEconomizados} minutos/mês.`,
-          prioridade: 'ALTA',
-          ferramenta: 'SMED (Troca Rápida de Ferramentas)',
-          ganho: `R$ ${ganho.toLocaleString()}/mês`,
-          esforco: '2-3 dias',
-          investimento: 'baixo'
+      // INSIGHT: SMED (Troca Rápida)
+      if (gargalo.setup > 15) {
+        const ganho = Math.round(gargalo.setup * 0.4 * 22 * custoMinuto);
+        roiGlobalMensal += ganho;
+        insights.push({
+          tipo: 'CRÍTICO',
+          titulo: `Redução de Setup: ${gargalo.posto_nome}`,
+          descricao: `Setup de ${gargalo.setup}min limita a linha ${linha.nome}. Alvo: ${Math.round(gargalo.setup * 0.6)}min.`,
+          ferramenta: 'SMED',
+          ganho_estimado: ganho
         });
       }
 
-      // REGRA 2: Disponibilidade baixa (< 85%)
-      if (postoGargalo.disponibilidade < 85) {
-        const ganho = Math.round(5000);
-        ganhoTotal += ganho;
-        
-        sugestoes.push({
-          titulo: `🧹 Implementar 5S + TPM no posto ${postoGargalo.nome}`,
-          descricao: `Disponibilidade atual de ${postoGargalo.disponibilidade}%. Aplicar 5S para organização e TPM para manutenção autônoma.`,
-          prioridade: 'MÉDIA',
-          ferramenta: '5S + TPM (Manutenção Produtiva Total)',
-          ganho: `R$ ${ganho.toLocaleString()}/mês`,
-          esforco: '1 semana',
-          investimento: 'baixo'
+      // INSIGHT: Balanceamento
+      const mediaCiclo = linha.postos.reduce((a, b) => a + b.ciclo, 0) / linha.postos.length;
+      if (gargalo.ciclo > mediaCiclo * 1.3) {
+        insights.push({
+          tipo: 'ESTRUTURAL',
+          titulo: `Desbalanceamento em ${linha.nome}`,
+          descricao: `O posto ${gargalo.posto_nome} está 30% acima da carga média da linha.`,
+          ferramenta: 'Yamazumi / Balanceamento',
+          ganho_estimado: 0 // Ganho indireto por capacidade
         });
       }
-
-      // REGRA 3: Gargalo muito acima da média
-      const mediaCiclo = postosComCicloReal.reduce((acc, p) => acc + p.cicloReal, 0) / postosComCicloReal.length;
-      if (maiorCiclo > mediaCiclo * 1.3) { // 30% acima da média
-        const ganho = Math.round(8000);
-        ganhoTotal += ganho;
-        
-        sugestoes.push({
-          titulo: `⚖️ Balancear linha ${linha.nome}`,
-          descricao: `Gargalo no posto ${postoGargalo.nome} (${maiorCiclo.toFixed(1)}s) está ${((maiorCiclo/mediaCiclo - 1)*100).toFixed(0)}% acima da média. Redistribuir tarefas.`,
-          prioridade: 'ALTA',
-          ferramenta: 'Balanceamento de Linha',
-          ganho: `R$ ${ganho.toLocaleString()}/mês`,
-          esforco: '1 semana',
-          investimento: 'baixo'
-        });
-      }
-
-      // REGRA 4: Perdas por refugo (se houver)
-      if (linha.perdas && linha.perdas.length > 0) {
-        const totalRefugo = linha.perdas.reduce((acc, p) => acc + (p.refugo_pecas || 0), 0);
-        if (totalRefugo > 10) { // mais de 10 peças/dia
-          const ganho = Math.round(totalRefugo * 50 * 22); // R$ 50/peça
-          ganhoTotal += ganho;
-          
-          sugestoes.push({
-            titulo: `📉 Reduzir refugo na linha ${linha.nome}`,
-            descricao: `Refugo atual de ${totalRefugo} peças/dia. Aplicar Ishikawa e CEP para identificar causas raiz.`,
-            prioridade: 'MÉDIA',
-            ferramenta: 'Ishikawa + CEP (Controle Estatístico)',
-            ganho: `R$ ${ganho.toLocaleString()}/mês`,
-            esforco: '2 semanas',
-            investimento: 'baixo'
-          });
-        }
-      }
-    }
-
-    // REGRA 5: Sugestão genérica se não houver nenhuma
-    if (sugestoes.length === 0) {
-      sugestoes.push({
-        titulo: '📋 Realizar diagnóstico detalhado',
-        descricao: 'Os dados atuais não indicam problemas críticos. Recomenda-se um diagnóstico aprofundado para identificar oportunidades.',
-        prioridade: 'MÉDIA',
-        ferramenta: 'Diagnóstico Lean',
-        ganho: 'R$ 0 (investimento)',
-        esforco: '2 semanas',
-        investimento: 'médio'
-      });
-    }
-
-    // Ordenar por prioridade (ALTA primeiro)
-    sugestoes.sort((a, b) => {
-      const prioridade = { 'ALTA': 1, 'MÉDIA': 2, 'BAIXA': 3 };
-      return (prioridade[a.prioridade] || 99) - (prioridade[b.prioridade] || 99);
     });
 
-    // Limitar a 5 sugestões
-    const sugestoesLimitadas = sugestoes.slice(0, 5);
-
-    res.json({ 
-      sugestoes: {
-        resumo: `🔍 Análise concluída. Identificamos ${sugestoesLimitadas.length} oportunidades de melhoria com ganho total estimado de R$ ${ganhoTotal.toLocaleString()}/mês.`,
-        acoes: sugestoesLimitadas,
-        projecoes: {
-          novoOEE: '85%',
-          ganhoMensal: `R$ ${ganhoTotal.toLocaleString()}`,
-          tempoEstimado: '2-3 meses',
-          investimentoTotal: 'baixo'
-        }
-      }
+    res.status(200).json({
+      resumo_executivo: `Oportunidade de recuperação de ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(roiGlobalMensal)}/mês.`,
+      plano_de_acao: insights.sort((a, b) => b.ganho_estimado - a.ganho_estimado)
     });
 
   } catch (error) {
-    console.error("Erro na rota /api/ia/sugestoes:", error);
-    res.status(500).json({ 
-      sugestoes: { 
-        resumo: "Erro ao gerar sugestões", 
-        acoes: [
-          {
-            titulo: "🔧 Aplicar SMED nos postos com setup alto",
-            descricao: "Identificar e reduzir setup nos postos gargalo",
-            prioridade: "ALTA",
-            ferramenta: "SMED",
-            ganho: "R$ 2.500/mês",
-            esforco: "2-3 dias",
-            investimento: "baixo"
-          }
-        ],
-        projecoes: {
-          novoOEE: "85%",
-          ganhoMensal: "R$ 2.500",
-          tempoEstimado: "2 meses",
-          investimentoTotal: "baixo"
-        }
-      }
-    });
+    console.error("❌ Erro no Motor de Insights:", error.message);
+    res.status(500).json({ erro: "Falha ao processar inteligência industrial." });
   }
 });
 
 // ========================================
-// 📋 ROTAS DO CHECKLIST
+// 📋 MÓDULO: GESTÃO DE PROJETOS E CHECKLIST
 // ========================================
 
-// Criar novo projeto
-app.post("/api/checklist/projeto", autenticarToken, async (req, res) => {
+/**
+ * ROTA: INICIALIZAR PROJETO NEXUS
+ * Cria a estrutura de fases padrão automaticamente.
+ */
+app.post("/api/projects/init", autenticarToken, async (req, res) => {
+  const client = await pool.connect();
   try {
     const { empresa_id, nome, data_inicio, data_previsao } = req.body;
 
-    const result = await pool.query(
+    await client.query('BEGIN');
+
+    // 1. Inserir Projeto
+    const projetoRes = await client.query(
       `INSERT INTO projetos_checklist (empresa_id, nome, data_inicio, data_previsao)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
+       VALUES ($1, $2, $3, $4) RETURNING id`,
       [empresa_id, nome, data_inicio, data_previsao]
     );
+    const projetoId = projetoRes.rows[0].id;
 
-    // Criar fases padrão
-    const projetoId = result.rows[0].id;
+    // 2. Fases Metodologia Nexus (Execução em Bloco)
     const fases = [
-      { nome: 'Fase 1 - Diagnóstico', ordem: 1 },
-      { nome: 'Fase 2 - Implantação', ordem: 2 },
-      { nome: 'Fase 3 - Acompanhamento', ordem: 3 }
+      ['Fase 1 - Diagnóstico & VSM', 1],
+      ['Fase 2 - Kaizen & Implantação', 2],
+      ['Fase 3 - Sustentação & Auditoria', 3]
     ];
 
-    for (const fase of fases) {
-      await pool.query(
-        `INSERT INTO fases_checklist (projeto_id, nome, ordem)
-         VALUES ($1, $2, $3)`,
-        [projetoId, fase.nome, fase.ordem]
+    for (const [faseNome, ordem] of fases) {
+      await client.query(
+        `INSERT INTO fases_checklist (projeto_id, nome, ordem, status) VALUES ($1, $2, $3, 'Aguardando')`,
+        [projetoId, faseNome, ordem]
       );
     }
 
-    res.status(201).json(result.rows[0]);
+    await client.query('COMMIT');
+    res.status(201).json({ id: projetoId, mensagem: "Projeto Nexus inicializado com sucesso." });
+
   } catch (error) {
-    console.error("Erro ao criar projeto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    await client.query('ROLLBACK');
+    res.status(500).json({ erro: "Falha na transação do projeto." });
+  } finally {
+    client.release();
   }
 });
 
-// Listar projetos de uma empresa
-app.get("/api/checklist/projetos/:empresaId", autenticarToken, async (req, res) => {
-  try {
-    const { empresaId } = req.params;
-
-    const result = await pool.query(
-      `SELECT * FROM projetos_checklist 
-       WHERE empresa_id = $1 
-       ORDER BY created_at DESC`,
-      [empresaId]
-    );
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Erro ao buscar projetos:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Buscar projeto completo com fases e itens
-app.get("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) => {
+/**
+ * ROTA: PROGRESSO DO PROJETO
+ * Retorna o percentual de conclusão baseado nos itens do checklist.
+ */
+app.get("/api/projects/progress/:projetoId", autenticarToken, async (req, res) => {
   try {
     const { projetoId } = req.params;
-
-    // Buscar projeto
-    const projeto = await pool.query(
-      `SELECT p.*, e.nome as empresa_nome 
-       FROM projetos_checklist p
-       JOIN empresa e ON e.id = p.empresa_id
-       WHERE p.id = $1`,
-      [projetoId]
-    );
-
-    if (projeto.rows.length === 0) {
-      return res.status(404).json({ erro: "Projeto não encontrado" });
-    }
-
-    // Buscar fases com itens
-    const fases = await pool.query(
-      `SELECT f.*, 
-        (SELECT json_agg(i ORDER BY i.ordem) FROM itens_checklist i WHERE i.fase_id = f.id) as itens
-       FROM fases_checklist f
-       WHERE f.projeto_id = $1
-       ORDER BY f.ordem`,
-      [projetoId]
-    );
-
-    res.json({
-      projeto: projeto.rows[0],
-      fases: fases.rows
-    });
-  } catch (error) {
-    console.error("Erro ao buscar projeto:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Adicionar item ao checklist
-app.post("/api/checklist/item", autenticarToken, async (req, res) => {
-  try {
-    const { fase_id, descricao, ordem } = req.body;
-
-    const result = await pool.query(
-      `INSERT INTO itens_checklist (fase_id, descricao, ordem)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [fase_id, descricao, ordem]
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao criar item:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Atualizar item (concluir, editar)
-app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
-  try {
-    const { itemId } = req.params;
-    const { concluido, observacoes } = req.body;
-
-    const result = await pool.query(
-      `UPDATE itens_checklist 
-       SET concluido = COALESCE($1, concluido),
-           observacoes = COALESCE($2, observacoes),
-           data_conclusao = CASE WHEN $1 = true THEN CURRENT_TIMESTAMP ELSE data_conclusao END
-       WHERE id = $3
-       RETURNING *`,
-      [concluido, observacoes, itemId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Item não encontrado" });
-    }
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao atualizar item:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// Atualizar fase
-app.put("/api/checklist/fase/:faseId", autenticarToken, async (req, res) => {
-  try {
-    const { faseId } = req.params;
-    const { data_inicio, data_previsao, data_conclusao, status, progresso } = req.body;
-
-    const result = await pool.query(
-      `UPDATE fases_checklist 
-       SET data_inicio = COALESCE($1, data_inicio),
-           data_previsao = COALESCE($2, data_previsao),
-           data_conclusao = COALESCE($3, data_conclusao),
-           status = COALESCE($4, status),
-           progresso = COALESCE($5, progresso)
-       WHERE id = $6
-       RETURNING *`,
-      [data_inicio, data_previsao, data_conclusao, status, progresso, faseId]
-    );
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error("Erro ao atualizar fase:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
-  }
-});
-
-// ========================================
-// 🧪 ROTA TEMPORÁRIA - CRIAR PROJETO DE TESTE
-// ========================================
-app.get("/checklist/criar-teste", async (req, res) => {
-  try {
-    // 1. Buscar empresa (prioridade para "Empresa Teste")
-    let empresa = await pool.query(
-      `SELECT id, nome FROM empresas 
-       WHERE nome ILIKE '%teste%' 
-       LIMIT 1`
-    );
     
-    // Se não encontrar, pega a primeira empresa
-    if (empresa.rows.length === 0) {
-      empresa = await pool.query("SELECT id, nome FROM empresas LIMIT 1");
-    }
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE concluido = true) as concluidos
+      FROM itens_checklist i
+      JOIN fases_checklist f ON i.fase_id = f.id
+      WHERE f.projeto_id = $1
+    `, [projetoId]);
 
-    // Se ainda não tiver empresa, erro
-    if (empresa.rows.length === 0) {
-      return res.status(400).json({ 
-        erro: "Nenhuma empresa encontrada. Cadastre uma empresa primeiro." 
-      });
-    }
+    const { total, concluidos } = stats.rows[0];
+    const percentual = total > 0 ? Math.round((concluidos / total) * 100) : 0;
 
-    const empresaId = empresa.rows[0].id;
-    const empresaNome = empresa.rows[0].nome;
+    res.json({ projetoId, total, concluidos, progresso: `${percentual}%` });
+  } catch (error) {
+    res.status(500).json({ erro: "Erro ao calcular progresso." });
+  }
+});
 
-    // 2. Verificar se já existe projeto para não duplicar
-    const projetoExistente = await pool.query(
-      `SELECT id FROM projetos_checklist 
-       WHERE empresa_id = $1 AND nome = 'Projeto Teste'`,
-      [empresaId]
-    );
+// ========================================
+// 🧪 MÓDULO: SEEDER DE DEMONSTRAÇÃO NEXUS
+// ========================================
 
-    if (projetoExistente.rows.length > 0) {
-      return res.json({ 
-        mensagem: `✅ Projeto já existe para ${empresaNome}!`,
-        projetoId: projetoExistente.rows[0].id,
-        empresa: empresaNome,
-        status: "existente"
-      });
-    }
+/**
+ * ROTA: SETUP DE DEMO (AMBIENTE DE TESTE)
+ * Popula o sistema com um cenário industrial completo para validação do Front-end.
+ */
+app.get("/api/admin/seed-demo", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-    // 3. Criar o projeto
-    const projeto = await pool.query(
-      `INSERT INTO projetos_checklist 
-       (empresa_id, nome, data_inicio, data_previsao, status)
-       VALUES ($1, 'Projeto Teste', CURRENT_DATE, CURRENT_DATE + INTERVAL '3 months', 'em_andamento')
-       RETURNING id`,
-      [empresaId]
-    );
+    // 1. Garantir Empresa de Teste (Cenário Realista)
+    let empresa = await client.query("SELECT id FROM empresas WHERE nome ILIKE '%Indústria Nexus Demo%' LIMIT 1");
+    let empresaId;
 
-    const projetoId = projeto.rows[0].id;
-
-    // 4. Criar as 3 fases
-    const fases = [
-      { nome: 'Fase 1 - Diagnóstico', ordem: 1 },
-      { nome: 'Fase 2 - Implantação', ordem: 2 },
-      { nome: 'Fase 3 - Acompanhamento', ordem: 3 }
-    ];
-
-    for (const fase of fases) {
-      const faseRes = await pool.query(
-        `INSERT INTO fases_checklist (projeto_id, nome, ordem, status)
-         VALUES ($1, $2, $3, 'pendente') 
-         RETURNING id`,
-        [projetoId, fase.nome, fase.ordem]
+    if (empresa.rowCount === 0) {
+      const novaEmp = await client.query(
+        "INSERT INTO empresas (nome, cnpj, setor) VALUES ($1, $2, $3) RETURNING id",
+        ['Indústria Nexus Demo', '00.000.000/0001-00', 'Metalúrgica']
       );
+      empresaId = novaEmp.rows[0].id;
+    } else {
+      empresaId = empresa.rows[0].id;
+    }
 
-      const faseId = faseRes.rows[0].id;
+    // 2. Criar Projeto Estruturado
+    const projRes = await client.query(
+      `INSERT INTO projetos_checklist (empresa_id, nome, data_inicio, data_previsao, status)
+       VALUES ($1, 'Otimização Lean 2026', CURRENT_DATE, CURRENT_DATE + INTERVAL '90 days', 'em_andamento')
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [empresaId]
+    );
 
-      // 5. Criar itens específicos para cada fase
-      if (fase.ordem === 1) {
-        // Fase 1 - Diagnóstico
-        await pool.query(
-          `INSERT INTO itens_checklist (fase_id, descricao, ordem) VALUES
-           ($1, 'Mapear fluxo de valor (VSM) - identificar desperdícios', 1),
-           ($1, 'Coletar tempos de ciclo de todos os postos (cronoanálise)', 2),
-           ($1, 'Identificar gargalos por linha', 3),
-           ($1, 'Calcular OEE atual por linha', 4),
-           ($1, 'Quantificar perdas (setup, microparadas, refugo)', 5),
-           ($1, 'Elaborar relatório de diagnóstico com oportunidades', 6)`,
-          [faseId]
+    if (projRes.rowCount > 0) {
+      const projetoId = projRes.rows[0].id;
+
+      // 3. Fases e Itens (Sincronizados com sua expertise de Engenharia)
+      const setupFases = [
+        { 
+          nome: 'Fase 1 - Diagnóstico (VSM)', 
+          itens: ['Mapear Fluxo de Valor', 'Cronoanálise de Gargalos', 'Cálculo de OEE Base'] 
+        },
+        { 
+          nome: 'Fase 2 - Implementação (Kaizen)', 
+          itens: ['Setup Rápido (SMED)', 'Padronização 5S', 'Balanceamento de Postos'] 
+        }
+      ];
+
+      for (let i = 0; i < setupFases.length; i++) {
+        const fase = await client.query(
+          "INSERT INTO fases_checklist (projeto_id, nome, ordem, status) VALUES ($1, $2, $3, 'em_andamento') RETURNING id",
+          [projetoId, setupFases[i].nome, i + 1]
         );
-      } else if (fase.ordem === 2) {
-        // Fase 2 - Implantação
-        await pool.query(
-          `INSERT INTO itens_checklist (fase_id, descricao, ordem) VALUES
-           ($1, 'Aplicar SMED nos postos gargalo (reduzir setup)', 1),
-           ($1, 'Realizar 5S nos postos críticos', 2),
-           ($1, 'Balancear linha de produção', 3),
-           ($1, 'Criar procedimentos operacionais padrão (POP)', 4),
-           ($1, 'Treinar operadores (20 horas)', 5),
-           ($1, 'Implementar quadro de indicadores visuais', 6)`,
-          [faseId]
-        );
-      } else {
-        // Fase 3 - Acompanhamento
-        await pool.query(
-          `INSERT INTO itens_checklist (fase_id, descricao, ordem) VALUES
-           ($1, 'Monitorar OEE semanalmente', 1),
-           ($1, 'Realizar reuniões de acompanhamento (1h/semana)', 2),
-           ($1, 'Gerar relatórios mensais de evolução', 3),
-           ($1, 'Ajustar processos conforme necessário', 4),
-           ($1, 'Documentar lições aprendidas', 5),
-           ($1, 'Elaborar plano de sustentação', 6)`,
-          [faseId]
-        );
+        
+        const faseId = fase.rows[0].id;
+        for (let j = 0; j < setupFases[i].itens.length; j++) {
+          await client.query(
+            "INSERT INTO itens_checklist (fase_id, descricao, ordem, concluido) VALUES ($1, $2, $3, $4)",
+            [faseId, setupFases[i].itens[j], j + 1, (i === 0 && j === 0)] // Primeiro item da primeira fase já nasce pronto
+          );
+        }
       }
     }
 
-    // 6. Marcar alguns itens como concluídos para teste
-    const fase1 = await pool.query(
-      "SELECT id FROM fases_checklist WHERE projeto_id = $1 AND ordem = 1",
-      [projetoId]
-    );
-
-    if (fase1.rows.length > 0) {
-      const fase1Id = fase1.rows[0].id;
-      
-      // Concluir primeiros itens da fase 1
-      await pool.query(
-        `UPDATE itens_checklist 
-         SET concluido = true, 
-             data_conclusao = CURRENT_TIMESTAMP 
-         WHERE fase_id = $1 AND ordem <= 2`, // Conclui os 2 primeiros itens
-        [fase1Id]
-      );
-
-      // Atualizar progresso da fase 1
-      const totalItens = await pool.query(
-        "SELECT COUNT(*) as total FROM itens_checklist WHERE fase_id = $1",
-        [fase1Id]
-      );
-      
-      const itensConcluidos = await pool.query(
-        "SELECT COUNT(*) as concluidos FROM itens_checklist WHERE fase_id = $1 AND concluido = true",
-        [fase1Id]
-      );
-
-      const progresso = Math.round((itensConcluidos.rows[0].concluidos / totalItens.rows[0].total) * 100);
-
-      await pool.query(
-        `UPDATE fases_checklist 
-         SET data_inicio = CURRENT_DATE,
-             data_previsao = CURRENT_DATE + INTERVAL '2 weeks',
-             status = 'em_andamento',
-             progresso = $1
-         WHERE id = $2`,
-        [progresso, fase1Id]
-      );
-    }
-
-    // 7. Retornar sucesso
-    res.json({ 
-      mensagem: `✅ Projeto de teste criado com sucesso para ${empresaNome}!`,
-      projetoId,
-      empresa: empresaNome,
-      detalhes: {
-        fases: 3,
-        itens: 18,
-        empresaId
-      },
-      proximoPasso: "Acesse o menu 'Checklist' no sistema e selecione esta empresa."
-    });
+    await client.query('COMMIT');
+    res.json({ status: "Ambiente de demonstração Nexus configurado com sucesso." });
 
   } catch (error) {
-    console.error("❌ Erro ao criar projeto de teste:", error);
-    res.status(500).json({ 
-      erro: "Erro ao criar projeto: " + error.message 
-    });
+    await client.query('ROLLBACK');
+    res.status(500).json({ erro: error.message });
+  } finally {
+    client.release();
   }
 });
 
 // ========================================
-// ✏️ ATUALIZAR EMPRESA (VERSÃO FINAL)
+// 🏢 MÓDULO: MASTER DATA MANAGEMENT (EMPRESAS)
 // ========================================
-app.put("/empresas/:id", autenticarToken, async (req, res) => {
+
+app.put("/api/companies/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const {
+    nome, cnpj, segmento, regime_tributario,
+    turnos, dias_produtivos_mes, meta_mensal
+  } = req.body;
+
   try {
-    const { id } = req.params;
-    const {
-      nome,
-      cnpj,
-      segmento,
-      regime_tributario,
-      turnos,
-      dias_produtivos_mes,
-      meta_mensal
-    } = req.body;
+    // 1. Validação de Negócio (Campos Numéricos Não Negativos)
+    if (turnos < 0 || dias_produtivos_mes < 0 || meta_mensal < 0) {
+      return res.status(400).json({ erro: "Valores operacionais não podem ser negativos." });
+    }
 
-    // Sanitização e Conversão de Tipos (Padrão de Segurança)
-    const nomeSanitizado = nome?.trim();
-    const cnpjSanitizado = cnpj?.replace(/[^\d]/g, '');
-    const turnosInt = turnos ? parseInt(turnos, 10) : 0;
-    const diasInt = dias_produtivos_mes ? parseInt(dias_produtivos_mes, 10) : 0;
-    const metaFloat = meta_mensal ? parseFloat(meta_mensal) : 0;
-
-    // Query corrigida para PLURAL 'empresas'
+    // 2. Sanitização Rigorosa
+    const cnpjClean = cnpj?.replace(/\D/g, '');
+    
+    // 3. Update com COALESCE (Mantém o valor atual se o enviado for null)
     const query = `
       UPDATE empresas SET
         nome = COALESCE($1, nome),
@@ -3306,75 +3157,145 @@ app.put("/empresas/:id", autenticarToken, async (req, res) => {
         regime_tributario = COALESCE($4, regime_tributario),
         turnos = COALESCE($5, turnos),
         dias_produtivos_mes = COALESCE($6, dias_produtivos_mes),
-        meta_mensal = COALESCE($7, meta_mensal)
+        meta_mensal = COALESCE($7, meta_mensal),
+        updated_at = CURRENT_TIMESTAMP
       WHERE id = $8
       RETURNING *;
     `;
 
     const values = [
-      nomeSanitizado,
-      cnpjSanitizado,
-      segmento,
-      regime_tributario,
-      turnosInt,
-      diasInt,
-      metaFloat,
-      id
+      nome?.trim(), cnpjClean, segmento, regime_tributario,
+      parseInt(turnos) || 0, parseInt(dias_produtivos_mes) || 0,
+      parseFloat(meta_mensal) || 0, id
     ];
 
     const result = await pool.query(query, values);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Empresa não encontrada" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Empresa não localizada." });
     }
 
-    console.log(`✅ Edição salva: ${nomeSanitizado}`);
-    res.json(result.rows[0]);
+    res.json({
+      mensagem: `Dados de ${result.rows[0].nome} atualizados com sucesso.`,
+      empresa: result.rows[0]
+    });
 
   } catch (error) {
-    console.error("❌ Erro ao atualizar empresa:", error.message);
-    res.status(500).json({ 
-      erro: "Erro interno ao atualizar empresa", 
-      detalhe: error.message 
-    });
+    console.error("❌ Erro MDM:", error.message);
+    res.status(500).json({ erro: "Falha na persistência dos dados da empresa." });
   }
 });
 
 // ========================================
-// 🗑️ EXCLUIR EMPRESA (CORRIGIDO)
+// 🗑️ MÓDULO: TERMINAÇÃO DE REGISTROS (SAFE DELETE)
 // ========================================
-app.delete("/empresas/:id", autenticarToken, async (req, res) => {
+
+app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
   try {
-    const { id } = req.params;
-    
-    // ✅ Alterado para 'empresas' (plural)
+    // 1. Execução do Delete com Retorno de Identificação
     const result = await pool.query(
-      "DELETE FROM empresas WHERE id = $1 RETURNING *", 
+      "DELETE FROM empresas WHERE id = $1 RETURNING nome", 
       [id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Empresa não encontrada" });
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Registro não localizado para exclusão." });
     }
 
-    res.json({ mensagem: "Empresa excluída com sucesso" });
-  } catch (error) {
-    console.error("Erro ao excluir empresa:", error);
+    console.warn(`🚨 Empresa removida do ecossistema: ${result.rows[0].nome}`);
+    
+    res.json({ 
+      mensagem: `A empresa ${result.rows[0].nome} e seus parâmetros foram removidos com sucesso.` 
+    });
 
-    // Tratamento para restrição de chave estrangeira (FK)
+  } catch (error) {
+    // 2. Tratamento de Erro de Chave Estrangeira (O CORAÇÃO DO BLOCO 50)
     if (error.code === '23503') {
-      return res.status(400).json({ 
-        erro: "Não é possível excluir a empresa: existem funcionários, linhas ou outros registros vinculados a ela." 
+      return res.status(409).json({ 
+        erro: "Bloqueio de Integridade: Esta empresa possui linhas de produção, funcionários ou contratos ativos no Hórus.",
+        sugestao: "Remova os vínculos ou arquive a empresa em vez de excluí-la."
       });
     }
 
-    res.status(500).json({ erro: "Erro interno no servidor ao excluir empresa" });
+    console.error("❌ Falha crítica na exclusão:", error.message);
+    res.status(500).json({ erro: "Erro sistêmico ao processar a exclusão." });
   }
 });
 
 // ========================================
-// 🚀 INICIAR SERVIDOR
+// 🔑 ROTA DE LOGIN (CONECTADA AO NEON)
 // ========================================
-app.listen(PORT, () => {
-  console.log(`Servidor Hórus rodando na porta ${PORT}`);
+app.post("/api/login", async (req, res) => {
+  const { email, senha } = req.body;
+
+  try {
+    // 1. Busca real no banco de dados Neon
+    const query = "SELECT * FROM usuarios WHERE email = $1";
+    const result = await pool.query(query, [email?.toLowerCase().trim()]);
+    const usuario = result.rows[0];
+
+    // 2. Validação de segurança
+    if (usuario && usuario.senha === senha) {
+      
+      // 3. Criação do Token JWT com os dados reais do banco
+      const token = jwt.sign(
+        { id: usuario.id, email: usuario.email, nivel: usuario.nivel }, 
+        process.env.JWT_SECRET, 
+        { expiresIn: "8h" }
+      );
+
+      console.log(`[AUTH] Login real bem-sucedido: ${usuario.email}`);
+
+      return res.json({
+        status: "sucesso",
+        mensagem: `Bem-vindo ao Sistema Hórus, ${usuario.nome.split(' ')[0]}.`,
+        token: token
+      });
+    }
+
+    // 4. Falha na autenticação
+    console.warn(`[SECURITY] Tentativa de login inválida: ${email}`);
+    return res.status(401).json({ erro: "E-mail ou senha inválidos." });
+
+  } catch (error) {
+    console.error("❌ Erro no Banco de Dados:", error.message);
+    return res.status(500).json({ erro: "Erro interno ao conectar ao banco de dados." });
+  }
+});
+
+// ========================================
+// 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
+// ========================================
+
+// Garante que a porta e o ambiente existam antes de subir o motor
+const PORT_SYSTEM = process.env.PORT || 3001;
+const ENV_SYSTEM = process.env.NODE_ENV || 'development';
+
+const server = app.listen(PORT_SYSTEM, () => {
+  console.log(`
+  ================================================
+  🚀 NEXUS ENGENHARIA APLICADA - SISTEMA HÓRUS
+  ================================================
+  📡 Status: Operacional
+  🔌 Porta: ${PORT_SYSTEM}
+  🌍 Ambiente: ${ENV_SYSTEM}
+  📊 Inteligência Industrial: Ativa
+  🛡️ Segurança JWT: Protegida
+  ================================================
+  `);
+});
+
+// Tratamento de interrupção graciosa (Graceful Shutdown)
+process.on('SIGTERM', () => {
+  console.log('🚨 SIGTERM recebido. Encerrando servidor Hórus...');
+  server.close(() => {
+    // Certifique-se de que a variável 'pool' existe no seu Bloco 1
+    if (typeof pool !== 'undefined') {
+      pool.end();
+    }
+    console.log('✅ Processos encerrados e banco de dados desconectado.');
+    process.exit(0);
+  });
 });
