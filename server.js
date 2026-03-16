@@ -1671,6 +1671,27 @@ app.get("/produtos", autenticarToken, async (req, res) => {
   }
 });
 
+// ROTA ESPECÍFICA PARA O SELETOR DO HÓRUS
+app.get("/produtos/filtro/empresa/:empresa_id", autenticarToken, async (req, res) => {
+  try {
+    const { empresa_id } = req.params;
+    
+    // Convertemos para Inteiro para garantir compatibilidade com o tipo 'integer' do Neon
+    const idNum = parseInt(empresa_id);
+
+    const result = await pool.query(
+      "SELECT id, nome, valor_unitario FROM produto WHERE empresa_id = $1 ORDER BY nome ASC", 
+      [idNum]
+    );
+    
+    // Retorna sempre um array (mesmo que vazio), que é o que o .map() do front precisa
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Erro ao filtrar produtos:", error);
+    res.status(500).json({ erro: "Erro no servidor ao buscar produtos da empresa" });
+  }
+});
+
 // Buscar um produto específico
 app.get("/produtos/:id", autenticarToken, async (req, res) => {
   try {
