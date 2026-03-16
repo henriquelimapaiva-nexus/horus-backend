@@ -3266,6 +3266,67 @@ app.post("/api/login", async (req, res) => {
 });
 
 // ========================================
+// 🏢 ROTAS DE NEGÓCIO (SISTEMA HÓRUS)
+// ========================================
+
+// 1. Listar todas as empresas
+app.get("/api/empresas", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM empresas ORDER BY nome");
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ erro: "Erro ao buscar empresas" });
+  }
+});
+
+// 2. Listar linhas de uma empresa específica
+app.get("/api/linhas/:empresaId", async (req, res) => {
+  const { empresaId } = req.params;
+  try {
+    const result = await pool.query("SELECT * FROM linhas WHERE empresa_id = $1", [empresaId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ erro: "Erro ao buscar linhas" });
+  }
+});
+
+// 3. Listar cargos de uma empresa (para cálculo de custos)
+app.get("/api/cargos/:empresaId", async (req, res) => {
+  const { empresaId } = req.params;
+  try {
+    const result = await pool.query("SELECT * FROM cargos WHERE empresa_id = $1", [empresaId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ erro: "Erro ao buscar cargos" });
+  }
+});
+
+// 4. Listar postos de uma linha
+app.get("/api/postos/:linhaId", async (req, res) => {
+  const { linhaId } = req.params;
+  try {
+    const result = await pool.query("SELECT * FROM postos WHERE linha_id = $1", [linhaId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ erro: "Erro ao buscar postos" });
+  }
+});
+
+// 5. Rota de Análise (O Dashboard pede isso, vamos mandar um valor base por enquanto)
+app.get("/api/analise-linha/:linhaId", async (req, res) => {
+  res.json({
+    eficiencia_percentual: 75.0,
+    capacidade_estimada_dia: 1200
+  });
+});
+
+// 6. Rota de Produtos (Evita erro 404 no faturamento)
+app.get("/api/linha-produto/:linhaId", async (req, res) => {
+  res.json([{ nome: "Produto Padrão", valor_unitario: 50.0 }]);
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
