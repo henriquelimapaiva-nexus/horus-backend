@@ -252,49 +252,43 @@ app.post("/linhas-com-multiplos-produtos", autenticarToken, async (req, res) => 
   try {
     await client.query('BEGIN');
     
-    const { empresa_id, nome, produtos_ids, takt_time_segundos, meta_diaria } = req.body;
+    // 🛠️ NO MASTER: 'produtos' agora é um array de objetos: [{id: 1, takt: 15, meta: 2000}, ...]
+    const { empresa_id, nome, horas_produtivas, produtos } = req.body;
 
-    // Validar se veio pelo menos um produto
-    if (!produtos_ids || produtos_ids.length === 0) {
+    if (!produtos || produtos.length === 0) {
       return res.status(400).json({ erro: "Selecione pelo menos um produto" });
     }
 
-    // Validar campos obrigatórios
-    if (!empresa_id || !nome || !takt_time_segundos || !meta_diaria) {
-      return res.status(400).json({ erro: "Todos os campos são obrigatórios" });
-    }
-
-    // 1. Criar a linha
+    // 1. Criar a linha (guardamos apenas o nome, empresa e as horas do turno)
     const linhaRes = await client.query(
-      `INSERT INTO linha_producao (empresa_id, nome, takt_time_segundos, meta_diaria)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO linha_producao (empresa_id, nome, horas_disponiveis)
+       VALUES ($1, $2, $3)
        RETURNING id`,
-      [empresa_id, nome, takt_time_segundos, meta_diaria]
+      [empresa_id, nome, horas_produtivas || 8.8]
     );
     
     const linhaId = linhaRes.rows[0].id;
 
-    // 2. Para cada produto, criar vínculo
-    for (const produto_id of produtos_ids) {
+    // 2. Para cada produto, salvar sua performance ESPECÍFICA nesta linha
+    for (const p of produtos) {
       await client.query(
-        `INSERT INTO linha_produto (linha_id, produto_id)
-         VALUES ($1, $2)`,
-        [linhaId, produto_id]
+        `INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
+         VALUES ($1, $2, $3, $4)`,
+        [linhaId, p.id, p.takt, p.meta]
       );
     }
 
     await client.query('COMMIT');
     
     res.status(201).json({ 
-      mensagem: "Linha criada com sucesso",
-      linha_id: linhaId,
-      quantidade_produtos: produtos_ids.length
+      mensagem: "Linha Master criada com sucesso",
+      linha_id: linhaId
     });
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("Erro ao criar linha com múltiplos produtos:", error);
-    res.status(500).json({ erro: "Erro no servidor" });
+    console.error("Erro Master Route:", error);
+    res.status(500).json({ erro: "Erro no servidor ao processar multicadastro" });
   } finally {
     client.release();
   }
@@ -1690,6 +1684,24 @@ app.get("/produtos/:id", autenticarToken, async (req, res) => {
     res.json(result.rows[0]);
   } catch (error) {
     console.error("Erro ao buscar produto:", error);
+    res.status(500).json({ erro: "Erro no servidor" });
+  }
+});
+
+// LISTAR PRODUTOS POR EMPRESA (Usado no Hórus / Nova Linha)
+app.get("/produtos/empresa/:empresa_id", autenticarToken, async (req, res) => {
+  try {
+    const { empresa_id } = req.params;
+    
+    // Note que aqui filtramos pela coluna empresa_id e buscamos todos (rows)
+    const result = await pool.query(
+      "SELECT * FROM produto WHERE empresa_id = $1 ORDER BY nome ASC", 
+      [empresa_id]
+    );
+    
+    res.json(result.rows); // Retorna a lista para o seletor
+  } catch (error) {
+    console.error("Erro ao buscar produtos da empresa:", error);
     res.status(500).json({ erro: "Erro no servidor" });
   }
 });
