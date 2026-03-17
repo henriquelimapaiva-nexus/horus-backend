@@ -158,33 +158,27 @@ app.get("/", (req, res) => {
  */
 app.get("/api/companies", autenticarToken, async (req, res) => {
   try {
-    // Buscamos os campos essenciais. 
-    // Dica: Evite SELECT * em produção se a tabela tiver colunas pesadas/binárias.
     const query = `
-      SELECT id, nome, cnpj, segmento, criado_em 
+      SELECT 
+        id, 
+        nome, 
+        cnpj, 
+        segmento, 
+        regime_tributario,
+        turnos,
+        dias_produtivos_mes,
+        meta_mensal,
+        criado_em 
       FROM empresas 
       ORDER BY criado_em DESC
     `;
     
     const result = await pool.query(query);
-
-    // GARANTIA INDUSTRIAL: O Frontend NUNCA deve receber null ou undefined aqui.
-    // Se não houver empresas, enviamos um array vazio [].
     res.status(200).json(result.rows || []);
 
   } catch (error) {
-    // Log detalhado no servidor para você debugar rápido
-    console.error("❌ Erro ao buscar empresas:", {
-      mensagem: error.message,
-      stack: error.stack,
-      timestamp: new Date().toISOString()
-    });
-
-    // Resposta genérica e segura para o cliente (não expõe estrutura do banco)
-    res.status(500).json({ 
-      erro: "Falha ao carregar lista de empresas",
-      codigo: "DB_FETCH_ERROR" 
-    });
+    console.error("❌ Erro ao buscar empresas:", error.message);
+    res.status(500).json({ erro: "Falha ao carregar empresas" });
   }
 });
 
