@@ -365,7 +365,7 @@ app.post("/api/lines-master", autenticarToken, async (req, res) => {
 
     // 2. Criar a Cabeça da Linha (Master)
     const linhaQuery = `
-      INSERT INTO linha_producao (empresa_id, nome, horas_disponiveis)
+      INSERT INTO linhas_producao (empresa_id, nome, horas_disponiveis)
       VALUES ($1, $2, $3)
       RETURNING id;
     `;
