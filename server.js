@@ -191,20 +191,6 @@ app.get("/api/companies", autenticarToken, async (req, res) => {
 // ========================================
 
 /**
- * 1️⃣ LISTAR EMPRESAS
- * Retorna a lista para o Front-end.
- */
-app.get("/api/companies", autenticarToken, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM empresas ORDER BY created_at DESC");
-    res.status(200).json(result.rows || []);
-  } catch (error) {
-    console.error("❌ Erro GET /companies:", error.message);
-    res.status(500).json({ erro: "Erro ao carregar lista de empresas" });
-  }
-});
-
-/**
  * 2️⃣ CADASTRAR EMPRESA
  * Com sanitização rigorosa e proteção de duplicidade.
  */
