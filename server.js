@@ -28,13 +28,15 @@ app.use(express.json());
 // ========================================
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300,
+    max: 100,
     message: { erro: "Muitas requisições. Tente novamente em 15 minutos." },
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Usa o IP real quando estiver atrás de proxy (Render)
+        return req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
+    }
 });
-
-app.use("/api/", apiLimiter);
 
 // ========================================
 // 🔌 CONEXÃO COM O BANCO (POSTGRESQL)
