@@ -596,19 +596,19 @@ app.post("/api/cycle-measurements", autenticarToken, async (req, res) => {
  * 1️⃣ LISTAR CARGOS POR DEPARTAMENTO
  * Permite filtrar a estrutura hierárquica da empresa.
  */
-app.get("/api/roles/:departamentoId", autenticarToken, async (req, res) => {
-  const { departamentoId } = req.params;
+app.get("/api/roles/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
 
   try {
     const result = await pool.query(
-      "SELECT * FROM cargo WHERE departamento_id = $1 ORDER BY nome ASC",
-      [departamentoId]
+      "SELECT * FROM cargo WHERE empresa_id = $1 ORDER BY nome ASC",
+      [empresaId]
     );
 
     res.status(200).json(result.rows || []);
   } catch (error) {
     console.error("❌ Erro GET /roles:", error.message);
-    res.status(500).json({ erro: "Falha ao recuperar cargos do departamento" });
+    res.status(500).json({ erro: "Falha ao recuperar cargos" });
   }
 });
 
@@ -618,20 +618,20 @@ app.get("/api/roles/:departamentoId", autenticarToken, async (req, res) => {
  */
 app.post("/api/roles", autenticarToken, async (req, res) => {
   const { 
-    departamento_id, 
+    empresa_id, 
     nome, 
     salario_base, 
     encargos_percentual 
   } = req.body;
 
-  if (!departamento_id || !nome) {
-    return res.status(400).json({ erro: "Departamento e Nome do cargo são obrigatórios." });
+  if (!empresa_id || !nome) {
+    return res.status(400).json({ erro: "Empresa e Nome do cargo são obrigatórios." });
   }
 
   try {
     const query = `
       INSERT INTO cargo
-      (departamento_id, nome, salario_base, encargos_percentual)
+      (empresa_id, nome, salario_base, encargos_percentual)
       VALUES ($1, $2, $3, $4)
       RETURNING *;
     `;
@@ -639,7 +639,7 @@ app.post("/api/roles", autenticarToken, async (req, res) => {
     // No Hórus, tratamos dinheiro com precisão.
     // Encargos padrão de 70% é uma estimativa segura para indústria (Brasil).
     const values = [
-      departamento_id,
+      empresa_id,
       nome.trim(),
       Math.abs(parseFloat(salario_base)) || 0,
       Math.abs(parseFloat(encargos_percentual)) || 70
@@ -652,7 +652,7 @@ app.post("/api/roles", autenticarToken, async (req, res) => {
     console.error("❌ Erro POST /roles:", error.message);
     
     if (error.code === '23503') {
-      return res.status(400).json({ erro: "Departamento inexistente." });
+      return res.status(400).json({ erro: "Empresa inexistente." });
     }
 
     res.status(500).json({ erro: "Erro ao registrar novo cargo" });
@@ -3252,48 +3252,48 @@ app.post("/api/login", async (req, res) => {
 // ========================================
 
 // 1. Listar todas as empresas
-app.get("/api/empresas", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM empresas ORDER BY nome");
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ erro: "Erro ao buscar empresas" });
-  }
-});
+//app.get("/api/empresas", async (req, res) => {
+//  try {
+//    const result = await pool.query("SELECT * FROM empresas ORDER BY nome");
+//    res.json(result.rows);
+//  } catch (err) {
+//    console.error(err.message);
+//    res.status(500).json({ erro: "Erro ao buscar empresas" });
+//  }
+//});
 
 // 2. Listar linhas de uma empresa específica
-app.get("/api/linhas/:empresaId", async (req, res) => {
-  const { empresaId } = req.params;
-  try {
-    const result = await pool.query("SELECT * FROM linhas WHERE empresa_id = $1", [empresaId]);
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar linhas" });
-  }
-});
+//app.get("/api/linhas/:empresaId", async (req, res) => {
+//  const { empresaId } = req.params;
+//  try {
+//    const result = await pool.query("SELECT * FROM linhas WHERE empresa_id = $1", [empresaId]);
+//    res.json(result.rows);
+//  } catch (err) {
+//    res.status(500).json({ erro: "Erro ao buscar linhas" });
+//  }
+//});
 
 // 3. Listar cargos de uma empresa (para cálculo de custos)
-app.get("/api/cargos/:empresaId", async (req, res) => {
-  const { empresaId } = req.params;
-  try {
-    const result = await pool.query("SELECT * FROM cargos WHERE empresa_id = $1", [empresaId]);
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar cargos" });
-  }
-});
+//app.get("/api/cargos/:empresaId", async (req, res) => {
+//  const { empresaId } = req.params;
+//  try {
+//    const result = await pool.query("SELECT * FROM cargos WHERE empresa_id = $1", [empresaId]);
+//    res.json(result.rows);
+//  } catch (err) {
+//    res.status(500).json({ erro: "Erro ao buscar cargos" });
+//  }
+//});
 
 // 4. Listar postos de uma linha
-app.get("/api/postos/:linhaId", async (req, res) => {
-  const { linhaId } = req.params;
-  try {
-    const result = await pool.query("SELECT * FROM postos WHERE linha_id = $1", [linhaId]);
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ erro: "Erro ao buscar postos" });
-  }
-});
+//app.get("/api/postos/:linhaId", async (req, res) => {
+//  const { linhaId } = req.params;
+//  try {
+//    const result = await pool.query("SELECT * FROM postos WHERE linha_id = $1", [linhaId]);
+//    res.json(result.rows);
+//  } catch (err) {
+//    res.status(500).json({ erro: "Erro ao buscar postos" });
+//  }
+//});
 
 // 5. Rota de Análise - AGORA COM DADOS REAIS
 app.get("/api/analise-linha/:linhaId", async (req, res) => {
