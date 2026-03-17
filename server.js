@@ -630,7 +630,7 @@ app.post("/api/roles", autenticarToken, async (req, res) => {
 
   try {
     const query = `
-      INSERT INTO cargo
+      INSERT INTO cargos
       (empresa_id, nome, salario_base, encargos_percentual)
       VALUES ($1, $2, $3, $4)
       RETURNING *;
