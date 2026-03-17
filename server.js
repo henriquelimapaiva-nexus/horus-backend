@@ -667,7 +667,7 @@ app.delete("/api/roles/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await pool.query("DELETE FROM cargo WHERE id = $1 RETURNING *", [id]);
+    const result = await pool.query("DELETE FROM cargos WHERE id = $1 RETURNING *", [id]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ erro: "Cargo não encontrado para exclusão." });
