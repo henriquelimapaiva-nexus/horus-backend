@@ -601,7 +601,7 @@ app.get("/api/roles/:empresaId", autenticarToken, async (req, res) => {
 
   try {
     const result = await pool.query(
-      "SELECT * FROM cargo WHERE empresa_id = $1 ORDER BY nome ASC",
+      "SELECT * FROM cargos WHERE empresa_id = $1 ORDER BY nome ASC",
       [empresaId]
     );
 
