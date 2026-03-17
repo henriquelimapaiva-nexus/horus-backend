@@ -274,7 +274,7 @@ app.get("/api/lines/:empresaId", autenticarToken, async (req, res) => {
 
   try {
     const result = await pool.query(
-      "SELECT * FROM linha_producao WHERE empresa_id = $1 ORDER BY nome ASC",
+      "SELECT * FROM linhas_producao WHERE empresa_id = $1 ORDER BY nome ASC",
       [empresaId]
     );
 
