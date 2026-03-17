@@ -688,6 +688,49 @@ app.delete("/api/roles/:id", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * 4️⃣ ATUALIZAR CARGO
+ * Permite editar nome, salário e encargos
+ */
+app.put("/api/roles/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { nome, salario_base, encargos_percentual } = req.body;
+
+  try {
+    const query = `
+      UPDATE cargos 
+      SET 
+        nome = COALESCE($1, nome),
+        salario_base = COALESCE($2, salario_base),
+        encargos_percentual = COALESCE($3, encargos_percentual)
+      WHERE id = $4
+      RETURNING *;
+    `;
+
+    const values = [
+      nome?.trim(),
+      salario_base !== undefined ? parseFloat(salario_base) : null,
+      encargos_percentual !== undefined ? parseFloat(encargos_percentual) : null,
+      id
+    ];
+
+    const result = await pool.query(query, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Cargo não encontrado." });
+    }
+
+    res.status(200).json({
+      mensagem: "Cargo atualizado com sucesso!",
+      cargo: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro PUT /roles:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar cargo" });
+  }
+});
+
 // ========================================
 // 👤 MÓDULO: GESTÃO DE COLABORADORES
 // ========================================
