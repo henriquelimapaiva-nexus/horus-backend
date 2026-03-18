@@ -375,6 +375,88 @@ app.delete("/api/lines/:id", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * 4️⃣ EDITAR LINHA (PUT)
+ * Atualiza os dados básicos da linha e suas associações com produtos
+ */
+app.put("/api/lines/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { nome, horas_disponiveis, produtos } = req.body;
+  
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // 1. Atualizar a linha
+    const result = await client.query(
+      `UPDATE linhas_producao 
+       SET nome = COALESCE($1, nome), 
+           horas_disponiveis = COALESCE($2, horas_disponiveis)
+       WHERE id = $3 RETURNING *`,
+      [nome, horas_disponiveis, id]
+    );
+    
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: "Linha não encontrada" });
+    }
+    
+    // 2. Se veio produtos, atualizar associações
+    if (produtos && produtos.length > 0) {
+      // Remover associações antigas
+      await client.query(
+        'DELETE FROM linha_produto WHERE linha_id = $1',
+        [id]
+      );
+      
+      // Inserir novas associações
+      for (const prod of produtos) {
+        await client.query(
+          `INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
+           VALUES ($1, $2, $3, $4)`,
+          [id, prod.produto_id || prod.id, prod.takt_time_segundos, prod.meta_diaria]
+        );
+      }
+    }
+    
+    await client.query('COMMIT');
+    
+    // Buscar a linha atualizada com os produtos
+    const linhaAtualizada = await client.query(
+      `SELECT l.*, 
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', lp.id,
+              'produto_id', lp.produto_id,
+              'takt_time_segundos', lp.takt_time_segundos,
+              'meta_diaria', lp.meta_diaria,
+              'nome', p.nome,
+              'valor_unitario', p.valor_unitario
+            )
+          ) FILTER (WHERE lp.produto_id IS NOT NULL), 
+          '[]'
+        ) as produtos
+       FROM linhas_producao l
+       LEFT JOIN linha_produto lp ON l.id = lp.linha_id
+       LEFT JOIN produtos p ON lp.produto_id = p.id
+       WHERE l.id = $1
+       GROUP BY l.id`,
+      [id]
+    );
+    
+    res.json(linhaAtualizada.rows[0]);
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao atualizar linha:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar linha" });
+  } finally {
+    client.release();
+  }
+});
+
 // ========================================
 // 🏭 MÓDULO: LINHAS MASTER (MULTIDATA)
 // ========================================
