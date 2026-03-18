@@ -381,20 +381,24 @@ app.delete("/api/lines/:id", autenticarToken, async (req, res) => {
  */
 app.put("/api/lines/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
-  const { nome, horas_disponiveis, produtos } = req.body;
+  const { nome, produtos } = req.body;
+  
+  // ✅ CORREÇÃO: Aceita horas em qualquer formato (frontend envia horas_produtivas_dia)
+  const horas = req.body.horas_disponiveis || req.body.horas_produtivas_dia || 16;
+  const horasNumericas = parseFloat(horas) || 16;
   
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
     
-    // 1. Atualizar a linha
+    // 1. Atualizar a linha - AGORA FUNCIONA COM QUALQUER NOME
     const result = await client.query(
       `UPDATE linhas_producao 
        SET nome = COALESCE($1, nome), 
-           horas_disponiveis = COALESCE($2, horas_disponiveis)
+           horas_disponiveis = $2
        WHERE id = $3 RETURNING *`,
-      [nome, horas_disponiveis, id]
+      [nome, horasNumericas, id]
     );
     
     if (result.rows.length === 0) {
@@ -415,7 +419,7 @@ app.put("/api/lines/:id", autenticarToken, async (req, res) => {
         await client.query(
           `INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
            VALUES ($1, $2, $3, $4)`,
-          [id, prod.produto_id || prod.id, prod.takt_time_segundos, prod.meta_diaria]
+          [id, prod.produto_id || prod.id, prod.takt_time_segundos || prod.takt, prod.meta_diaria || prod.meta]
         );
       }
     }
