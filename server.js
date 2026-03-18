@@ -335,6 +335,46 @@ app.post("/api/lines", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * 3️⃣ EXCLUIR LINHA
+ * Remove uma linha de produção e seus vínculos (produtos)
+ */
+app.delete("/api/lines/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Primeiro, excluir os vínculos com produtos (linha_produto)
+    await pool.query("DELETE FROM linha_produto WHERE linha_id = $1", [id]);
+    
+    // Depois, excluir a linha
+    const result = await pool.query(
+      "DELETE FROM linhas_producao WHERE id = $1 RETURNING *", 
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Linha não encontrada." });
+    }
+
+    res.status(200).json({ 
+      mensagem: "Linha e seus vínculos removidos com sucesso.",
+      linha: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro DELETE /lines:", error.message);
+    
+    // Se houver postos vinculados, o banco vai lançar erro de FK
+    if (error.code === '23503') {
+      return res.status(409).json({ 
+        erro: "Não é possível excluir: existem postos de trabalho vinculados a esta linha." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro ao excluir linha." });
+  }
+});
+
 // ========================================
 // 🏭 MÓDULO: LINHAS MASTER (MULTIDATA)
 // ========================================
