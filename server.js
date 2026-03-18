@@ -1599,6 +1599,83 @@ app.post("/api/line-product", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 🔗 MÓDULO: ATUALIZAR PRODUTO NA LINHA (PUT INDIVIDUAL)
+// ========================================
+
+/**
+ * ROTA: ATUALIZAR VÍNCULO PRODUTO-LINHA
+ * Atualiza takt e meta de um produto específico em uma linha
+ */
+app.put("/api/line-product/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { takt_time_segundos, meta_diaria } = req.body;
+
+  try {
+    const query = `
+      UPDATE linha_produto 
+      SET 
+        takt_time_segundos = COALESCE($1, takt_time_segundos),
+        meta_diaria = COALESCE($2, meta_diaria)
+      WHERE id = $3
+      RETURNING *;
+    `;
+
+    const values = [
+      takt_time_segundos !== undefined ? parseFloat(takt_time_segundos) : null,
+      meta_diaria !== undefined ? parseInt(meta_diaria) : null,
+      id
+    ];
+
+    const result = await pool.query(query, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Vínculo produto-linha não encontrado." });
+    }
+
+    res.status(200).json({
+      mensagem: "Produto na linha atualizado com sucesso.",
+      dados: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro PUT /line-product/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar produto na linha." });
+  }
+});
+
+// ========================================
+// 🔗 MÓDULO: REMOVER PRODUTO DA LINHA (DELETE)
+// ========================================
+
+/**
+ * ROTA: REMOVER VÍNCULO PRODUTO-LINHA
+ * Exclui um produto específico de uma linha
+ */
+app.delete("/api/line-product/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM linha_produto WHERE id = $1 RETURNING *",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Vínculo produto-linha não encontrado." });
+    }
+
+    res.status(200).json({
+      mensagem: "Produto removido da linha com sucesso.",
+      dados: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro DELETE /line-product/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao remover produto da linha." });
+  }
+});
+
+// ========================================
 // 📉 MÓDULO: GESTÃO DE DESPERDÍCIOS (PERDAS)
 // ========================================
 
