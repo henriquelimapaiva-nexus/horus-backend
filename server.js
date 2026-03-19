@@ -1877,14 +1877,15 @@ app.get("/api/losses/:linhaId", autenticarToken, async (req, res) => {
         pl.microparadas_minutos,
         pl.retrabalho_pecas,
         pl.refugo_pecas,
+        pl.data_perda,
         lp.takt_time_segundos,
         -- Cálculo de impacto: quanto tempo foi perdido em segundos
         (pl.microparadas_minutos * 60) as tempo_parada_total_seg
       FROM perdas_linha pl
       JOIN linha_produto lp ON lp.id = pl.linha_produto_id
-      JOIN produto p ON p.id = lp.produto_id
+      JOIN produtos p ON p.id = lp.produto_id  -- 👈 CORRIGIDO: "produtos" (plural)
       WHERE lp.linha_id = $1
-      ORDER BY pl.id DESC;
+      ORDER BY pl.data_perda DESC, pl.id DESC;
     `;
 
     const result = await pool.query(query, [linhaId]);
