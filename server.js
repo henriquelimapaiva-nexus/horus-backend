@@ -1870,34 +1870,49 @@ app.post("/api/losses", autenticarToken, async (req, res) => {
 // ========================================
 
 /**
- * ROTA: LISTAR HISTÓRICO DE PERDAS POR LINHA
- * Essencial para identificar quais produtos estão drenando a eficiência da unidade.
+ * ROTA: LISTAR HISTÓRICO DE PERDAS POR LINHA COM FILTRO DE DATAS
  */
 app.get("/api/losses/:linhaId", autenticarToken, async (req, res) => {
   const { linhaId } = req.params;
+  const { data_inicio, data_fim } = req.query;  // 👈 PEGAR DATAS DA QUERY
 
   try {
-    const query = `
+    let query = `
       SELECT 
         pl.id as perda_id,
         p.nome as produto_nome,
         pl.microparadas_minutos,
         pl.retrabalho_pecas,
         pl.refugo_pecas,
-        TO_CHAR(pl.data_perda, 'DD/MM/YYYY') as data_perda,  -- 👈 FORMATO CORRETO
+        TO_CHAR(pl.data_perda, 'DD/MM/YYYY') as data_perda,
         lp.takt_time_segundos,
-        -- Cálculo de impacto: quanto tempo foi perdido em segundos
         (pl.microparadas_minutos * 60) as tempo_parada_total_seg
       FROM perdas_linha pl
       JOIN linha_produto lp ON lp.id = pl.linha_produto_id
       JOIN produtos p ON p.id = lp.produto_id
       WHERE lp.linha_id = $1
-      ORDER BY pl.data_perda DESC, pl.id DESC;
     `;
 
-    const result = await pool.query(query, [linhaId]);
+    const values = [linhaId];
+    let paramIndex = 2;
 
-    // Se não houver perdas registradas, retornamos uma lista vazia, não erro.
+    // Adicionar filtro de data_inicio se fornecido
+    if (data_inicio) {
+      query += ` AND pl.data_perda >= $${paramIndex}`;
+      values.push(data_inicio);
+      paramIndex++;
+    }
+
+    // Adicionar filtro de data_fim se fornecido
+    if (data_fim) {
+      query += ` AND pl.data_perda <= $${paramIndex}`;
+      values.push(data_fim);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY pl.data_perda DESC, pl.id DESC;`;
+
+    const result = await pool.query(query, values);
     res.status(200).json(result.rows);
 
   } catch (error) {
