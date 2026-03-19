@@ -1811,26 +1811,29 @@ app.post("/api/losses", autenticarToken, async (req, res) => {
     linha_produto_id,
     microparadas_minutos,
     retrabalho_pecas,
-    refugo_pecas
+    refugo_pecas,
+    data_perda  // 👈 ADICIONADO!
   } = req.body;
 
   if (!linha_produto_id) {
     return res.status(400).json({ erro: "ID do vínculo linha-produto é obrigatório." });
   }
 
-  // Sanitização: Garantir que perdas nunca sejam negativas (Math.max)
+  // Sanitização: Garantir que perdas nunca sejam negativas
   const micro = Math.max(0, parseFloat(microparadas_minutos) || 0);
   const retrabalho = Math.max(0, parseInt(retrabalho_pecas, 10) || 0);
   const refugo = Math.max(0, parseInt(refugo_pecas, 10) || 0);
+  
+  // Usar data enviada ou data atual
+  const data = data_perda || new Date().toISOString().split('T')[0];
 
   try {
-    // Lógica de Upsert: Se já houver registro de perdas para este produto nesta linha, ele atualiza.
-    // Isso evita duplicidade de dados no cálculo do OEE.
+    // Lógica de Upsert: Se já houver registro de perdas para este produto nesta DATA, ele atualiza.
     const query = `
       INSERT INTO perdas_linha 
-      (linha_produto_id, microparadas_minutos, retrabalho_pecas, refugo_pecas)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (linha_produto_id) 
+      (linha_produto_id, microparadas_minutos, retrabalho_pecas, refugo_pecas, data_perda)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (linha_produto_id, data_perda) 
       DO UPDATE SET 
         microparadas_minutos = EXCLUDED.microparadas_minutos,
         retrabalho_pecas = EXCLUDED.retrabalho_pecas,
@@ -1838,7 +1841,7 @@ app.post("/api/losses", autenticarToken, async (req, res) => {
       RETURNING *;
     `;
 
-    const values = [linha_produto_id, micro, retrabalho, refugo];
+    const values = [linha_produto_id, micro, retrabalho, refugo, data];
 
     const result = await pool.query(query, values);
     
@@ -1852,6 +1855,10 @@ app.post("/api/losses", autenticarToken, async (req, res) => {
     
     if (error.code === '23503') {
       return res.status(400).json({ erro: "Vínculo de linha-produto não encontrado." });
+    }
+
+    if (error.code === '23505') {
+      return res.status(409).json({ erro: "Já existe um registro para esta data." });
     }
 
     res.status(500).json({ erro: "Falha técnica ao salvar indicadores de perda." });
