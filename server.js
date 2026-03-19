@@ -577,7 +577,8 @@ app.post("/api/work-stations", autenticarToken, async (req, res) => {
     tempo_ciclo_segundos,
     tempo_setup_minutos,
     cargo_id,
-    disponibilidade_percentual
+    disponibilidade_percentual,
+    ordem_fluxo
   } = req.body;
 
   if (!linha_id || !nome) {
@@ -600,7 +601,8 @@ app.post("/api/work-stations", autenticarToken, async (req, res) => {
       parseFloat(tempo_ciclo_segundos) || 0,
       parseFloat(tempo_setup_minutos) || 0,
       cargo_id || null,
-      parseFloat(disponibilidade_percentual) || 100
+      parseFloat(disponibilidade_percentual) || 100,
+      ordemFinal
     ];
 
     const result = await pool.query(query, values);
