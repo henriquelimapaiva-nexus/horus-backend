@@ -666,6 +666,56 @@ app.put("/api/work-stations/:id", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * ROTA: EXCLUIR POSTO
+ * Remove um posto de trabalho pelo ID
+ */
+app.delete("/api/work-stations/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    // 1. Verificar se o posto existe
+    const posto = await pool.query(
+      "SELECT * FROM posto_trabalho WHERE id = $1",
+      [id]
+    );
+    
+    if (posto.rows.length === 0) {
+      return res.status(404).json({ 
+        erro: "Posto de trabalho não encontrado" 
+      });
+    }
+    
+    // 2. Tentar excluir o posto
+    const result = await pool.query(
+      "DELETE FROM posto_trabalho WHERE id = $1 RETURNING *",
+      [id]
+    );
+    
+    console.log(`✅ Posto excluído: ${result.rows[0].nome} (ID: ${id})`);
+    
+    res.status(200).json({ 
+      mensagem: "Posto excluído com sucesso!",
+      posto: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error("❌ Erro ao excluir posto:", error.message);
+    
+    // 3. Tratamento de erro de chave estrangeira (se tiver vínculos)
+    if (error.code === '23503') {
+      return res.status(409).json({ 
+        erro: "Não é possível excluir: existem alocações ou medições vinculadas a este posto.",
+        detalhe: "Remova os vínculos antes de excluir o posto."
+      });
+    }
+    
+    res.status(500).json({ 
+      erro: "Erro interno ao excluir posto" 
+    });
+  }
+});
+
 // ========================================
 // 📈 MÓDULO: CRONOANÁLISE (VARIABILIDADE)
 // ========================================
