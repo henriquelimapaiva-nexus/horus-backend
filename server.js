@@ -568,7 +568,7 @@ app.get("/api/work-stations/:linhaId", autenticarToken, async (req, res) => {
 
 /**
  * 2️⃣ CADASTRAR POSTO
- * Inclui lógica de auto-incremento de fluxo dentro da mesma linha.
+ * Agora respeita a ordem_fluxo enviada pelo frontend
  */
 app.post("/api/work-stations", autenticarToken, async (req, res) => {
   const {
@@ -586,12 +586,22 @@ app.post("/api/work-stations", autenticarToken, async (req, res) => {
   }
 
   try {
+    // Determinar a ordem final
+    let ordemFinal = ordem_fluxo;
+    
+    // Se não veio ordem do frontend, calcular automaticamente
+    if (!ordemFinal) {
+      const ordemResult = await pool.query(
+        "SELECT COALESCE(MAX(ordem_fluxo), 0) + 1 as proxima_ordem FROM posto_trabalho WHERE linha_id = $1",
+        [linha_id]
+      );
+      ordemFinal = ordemResult.rows[0].proxima_ordem;
+    }
+
     const query = `
       INSERT INTO posto_trabalho
       (linha_id, nome, tempo_ciclo_segundos, tempo_setup_minutos, cargo_id, disponibilidade_percentual, ordem_fluxo)
-      VALUES ($1, $2, $3, $4, $5, $6,
-        (SELECT COALESCE(MAX(ordem_fluxo), 0) + 1 FROM posto_trabalho WHERE linha_id = $1)
-      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *;
     `;
 
@@ -602,7 +612,7 @@ app.post("/api/work-stations", autenticarToken, async (req, res) => {
       parseFloat(tempo_setup_minutos) || 0,
       cargo_id || null,
       parseFloat(disponibilidade_percentual) || 100,
-      ordemFinal
+      ordemFinal // 👈 AGORA USA A ORDEM CORRETA
     ];
 
     const result = await pool.query(query, values);
