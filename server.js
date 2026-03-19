@@ -1016,6 +1016,67 @@ app.delete("/api/employees/:id", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * 4️⃣ ATUALIZAR COLABORADOR
+ * Permite editar nome, empresa e cargo
+ */
+app.put("/api/employees/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { nome, empresa_id, cargo_id } = req.body;
+
+  // Validação básica
+  if (!nome || !empresa_id) {
+    return res.status(400).json({ erro: "Nome e empresa são obrigatórios." });
+  }
+
+  try {
+    // Verificar se colaborador existe
+    const existe = await pool.query(
+      "SELECT id FROM colaborador WHERE id = $1",
+      [id]
+    );
+
+    if (existe.rowCount === 0) {
+      return res.status(404).json({ erro: "Colaborador não encontrado." });
+    }
+
+    // Atualizar colaborador
+    const query = `
+      UPDATE colaborador 
+      SET 
+        nome = $1,
+        empresa_id = $2,
+        cargo_id = $3
+      WHERE id = $4
+      RETURNING *;
+    `;
+
+    const values = [
+      nome.trim(),
+      parseInt(empresa_id),
+      cargo_id ? parseInt(cargo_id) : null,
+      id
+    ];
+
+    const result = await pool.query(query, values);
+
+    console.log(`✅ Colaborador atualizado: ${result.rows[0].nome}`);
+    res.status(200).json(result.rows[0]);
+
+  } catch (error) {
+    console.error("❌ Erro PUT /employees/:id:", error.message);
+    
+    // Erro de chave estrangeira
+    if (error.code === '23503') {
+      return res.status(400).json({ 
+        erro: "Empresa ou cargo inválido. Verifique os IDs." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro ao atualizar colaborador" });
+  }
+});
+
 // ========================================
 // 📊 MÓDULO: INTELIGÊNCIA DE LINHA (ANALYSIS)
 // ========================================
