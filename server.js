@@ -934,7 +934,7 @@ app.get("/api/employees/:empresaId", autenticarToken, async (req, res) => {
     const query = `
       SELECT c.*, ca.nome as cargo_nome 
       FROM colaborador c
-      LEFT JOIN cargo ca ON c.cargo_id = ca.id
+      LEFT JOIN cargos ca ON c.cargo_id = ca.id
       WHERE c.empresa_id = $1 
       ORDER BY c.nome ASC
     `;
