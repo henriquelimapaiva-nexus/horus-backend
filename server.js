@@ -4333,6 +4333,371 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 🟢 NOVOS MÓDULOS: OEE, SPC, TPM, RH
+// ========================================
+
+// ========================================
+// 📊 OEE - REGISTRO DE PRODUÇÃO
+// ========================================
+
+/**
+ * ROTA: REGISTRAR PRODUÇÃO (OEE)
+ */
+app.post("/api/producao/registrar", autenticarToken, async (req, res) => {
+  const { linha_id, produto_id, turno, data, pecas_produzidas, pecas_boas, tempo_operando_min, paradas, oee, disponibilidade, performance, qualidade } = req.body;
+
+  if (!linha_id || !produto_id || !pecas_produzidas) {
+    return res.status(400).json({ erro: "Linha, produto e peças produzidas são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO producao_oee 
+      (linha_id, produto_id, turno, data, pecas_produzidas, pecas_boas, tempo_operando_min, paradas, oee, disponibilidade, performance, qualidade)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *;
+    `;
+
+    const values = [
+      linha_id, produto_id, turno, data, pecas_produzidas, 
+      pecas_boas || pecas_produzidas, tempo_operando_min || null,
+      paradas ? JSON.stringify(paradas) : null,
+      oee, disponibilidade, performance, qualidade
+    ];
+
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro POST /producao/registrar:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar produção" });
+  }
+});
+
+/**
+ * ROTA: HISTÓRICO OEE POR LINHA
+ */
+app.get("/api/oee/history/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    let query = `
+      SELECT p.*, pr.nome as produto_nome
+      FROM producao_oee p
+      JOIN produtos pr ON pr.id = p.produto_id
+      WHERE p.linha_id = $1
+    `;
+    const values = [linhaId];
+    let paramIndex = 2;
+
+    if (data_inicio) {
+      query += ` AND p.data >= $${paramIndex}`;
+      values.push(data_inicio);
+      paramIndex++;
+    }
+    if (data_fim) {
+      query += ` AND p.data <= $${paramIndex}`;
+      values.push(data_fim);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY p.data DESC, p.turno ASC;`;
+
+    const result = await pool.query(query, values);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /oee/history:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar histórico OEE" });
+  }
+});
+
+// ========================================
+// 📊 SPC - QUALIDADE (DEFEITOS E MEDIÇÕES)
+// ========================================
+
+/**
+ * ROTA: REGISTRAR DEFEITO
+ */
+app.post("/api/qualidade/defeitos", autenticarToken, async (req, res) => {
+  const { posto_id, produto_id, tipo_defeito, quantidade, turno, descricao, acao_imediata, data } = req.body;
+
+  if (!posto_id || !produto_id || !tipo_defeito || !quantidade) {
+    return res.status(400).json({ erro: "Posto, produto, tipo e quantidade são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO defeitos_qualidade 
+      (posto_id, produto_id, tipo_defeito, quantidade, turno, descricao, acao_imediata, data)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, CURRENT_DATE))
+      RETURNING *;
+    `;
+
+    const values = [posto_id, produto_id, tipo_defeito, quantidade, turno || 1, descricao || null, acao_imediata || null, data];
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro POST /qualidade/defeitos:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar defeito" });
+  }
+});
+
+/**
+ * ROTA: LISTAR DEFEITOS POR LINHA
+ */
+app.get("/api/qualidade/defeitos/linha/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim, posto_id, produto_id } = req.query;
+
+  try {
+    let query = `
+      SELECT d.*, p.nome as posto_nome, pr.nome as produto_nome
+      FROM defeitos_qualidade d
+      JOIN posto_trabalho p ON p.id = d.posto_id
+      JOIN produtos pr ON pr.id = d.produto_id
+      WHERE p.linha_id = $1
+    `;
+    const values = [linhaId];
+    let paramIndex = 2;
+
+    if (data_inicio) { query += ` AND d.data >= $${paramIndex}`; values.push(data_inicio); paramIndex++; }
+    if (data_fim) { query += ` AND d.data <= $${paramIndex}`; values.push(data_fim); paramIndex++; }
+    if (posto_id) { query += ` AND d.posto_id = $${paramIndex}`; values.push(posto_id); paramIndex++; }
+    if (produto_id) { query += ` AND d.produto_id = $${paramIndex}`; values.push(produto_id); paramIndex++; }
+
+    query += ` ORDER BY d.data DESC, d.id DESC;`;
+
+    const result = await pool.query(query, values);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /qualidade/defeitos/linha:", error.message);
+    res.status(500).json({ erro: "Erro ao listar defeitos" });
+  }
+});
+
+/**
+ * ROTA: REGISTRAR MEDIÇÃO DIMENSIONAL
+ */
+app.post("/api/qualidade/medicoes", autenticarToken, async (req, res) => {
+  const { posto_id, produto_id, caracteristica, valor_medido, limite_inferior, limite_superior, unidade, turno, data } = req.body;
+
+  if (!posto_id || !produto_id || !caracteristica || valor_medido === undefined) {
+    return res.status(400).json({ erro: "Posto, produto, característica e valor medido são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO medicoes_qualidade 
+      (posto_id, produto_id, caracteristica, valor_medido, limite_inferior, limite_superior, unidade, turno, data)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, CURRENT_DATE))
+      RETURNING *;
+    `;
+
+    const values = [posto_id, produto_id, caracteristica, valor_medido, limite_inferior || null, limite_superior || null, unidade || "mm", turno || 1, data];
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro POST /qualidade/medicoes:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar medição" });
+  }
+});
+
+/**
+ * ROTA: LISTAR MEDIÇÕES POR LINHA
+ */
+app.get("/api/qualidade/medicoes/linha/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim, posto_id, produto_id } = req.query;
+
+  try {
+    let query = `
+      SELECT m.*, p.nome as posto_nome, pr.nome as produto_nome
+      FROM medicoes_qualidade m
+      JOIN posto_trabalho p ON p.id = m.posto_id
+      JOIN produtos pr ON pr.id = m.produto_id
+      WHERE p.linha_id = $1
+    `;
+    const values = [linhaId];
+    let paramIndex = 2;
+
+    if (data_inicio) { query += ` AND m.data >= $${paramIndex}`; values.push(data_inicio); paramIndex++; }
+    if (data_fim) { query += ` AND m.data <= $${paramIndex}`; values.push(data_fim); paramIndex++; }
+    if (posto_id) { query += ` AND m.posto_id = $${paramIndex}`; values.push(posto_id); paramIndex++; }
+    if (produto_id) { query += ` AND m.produto_id = $${paramIndex}`; values.push(produto_id); paramIndex++; }
+
+    query += ` ORDER BY m.data DESC, m.id DESC;`;
+
+    const result = await pool.query(query, values);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /qualidade/medicoes/linha:", error.message);
+    res.status(500).json({ erro: "Erro ao listar medições" });
+  }
+});
+
+// ========================================
+// 🔧 TPM - MANUTENÇÃO
+// ========================================
+
+/**
+ * ROTA: REGISTRAR MANUTENÇÃO
+ */
+app.post("/api/manutencao/registros", autenticarToken, async (req, res) => {
+  const { posto_id, tipo, causa, tempo_parada_min, tempo_reparo_min, descricao, peca_substituida, turno, data } = req.body;
+
+  if (!posto_id || !tipo || !tempo_parada_min) {
+    return res.status(400).json({ erro: "Posto, tipo e tempo de parada são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO manutencao_registros 
+      (posto_id, tipo, causa, tempo_parada_min, tempo_reparo_min, descricao, peca_substituida, turno, data)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, CURRENT_DATE))
+      RETURNING *;
+    `;
+
+    const values = [posto_id, tipo, causa || null, tempo_parada_min, tempo_reparo_min || 0, descricao || null, peca_substituida || null, turno || 1, data];
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro POST /manutencao/registros:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar manutenção" });
+  }
+});
+
+/**
+ * ROTA: LISTAR REGISTROS DE MANUTENÇÃO POR LINHA
+ */
+app.get("/api/manutencao/registros/linha/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim, posto_id } = req.query;
+
+  try {
+    let query = `
+      SELECT m.*, p.nome as posto_nome
+      FROM manutencao_registros m
+      JOIN posto_trabalho p ON p.id = m.posto_id
+      WHERE p.linha_id = $1
+    `;
+    const values = [linhaId];
+    let paramIndex = 2;
+
+    if (data_inicio) { query += ` AND m.data >= $${paramIndex}`; values.push(data_inicio); paramIndex++; }
+    if (data_fim) { query += ` AND m.data <= $${paramIndex}`; values.push(data_fim); paramIndex++; }
+    if (posto_id) { query += ` AND m.posto_id = $${paramIndex}`; values.push(posto_id); paramIndex++; }
+
+    query += ` ORDER BY m.data DESC, m.id DESC;`;
+
+    const result = await pool.query(query, values);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /manutencao/registros/linha:", error.message);
+    res.status(500).json({ erro: "Erro ao listar manutenções" });
+  }
+});
+
+// ========================================
+// 👥 RH - TREINAMENTO E HABILIDADES
+// ========================================
+
+/**
+ * ROTA: REGISTRAR TREINAMENTO
+ */
+app.post("/api/rh/treinamentos", autenticarToken, async (req, res) => {
+  const { colaborador_id, nome_curso, carga_horaria, data_realizacao, certificado, observacao } = req.body;
+
+  if (!colaborador_id || !nome_curso) {
+    return res.status(400).json({ erro: "Colaborador e nome do curso são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO treinamentos_colaborador 
+      (colaborador_id, nome_curso, carga_horaria, data_realizacao, certificado, observacao)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *;
+    `;
+
+    const values = [colaborador_id, nome_curso, carga_horaria || null, data_realizacao || CURRENT_DATE, certificado || null, observacao || null];
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro POST /rh/treinamentos:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar treinamento" });
+  }
+});
+
+/**
+ * ROTA: LISTAR TREINAMENTOS POR COLABORADOR
+ */
+app.get("/api/rh/treinamentos/colaborador/:colaboradorId", autenticarToken, async (req, res) => {
+  const { colaboradorId } = req.params;
+
+  try {
+    const query = `
+      SELECT * FROM treinamentos_colaborador 
+      WHERE colaborador_id = $1 
+      ORDER BY data_realizacao DESC;
+    `;
+    const result = await pool.query(query, [colaboradorId]);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /rh/treinamentos/colaborador:", error.message);
+    res.status(500).json({ erro: "Erro ao listar treinamentos" });
+  }
+});
+
+/**
+ * ROTA: REGISTRAR HABILIDADE
+ */
+app.post("/api/rh/habilidades", autenticarToken, async (req, res) => {
+  const { colaborador_id, habilidade, nivel } = req.body;
+
+  if (!colaborador_id || !habilidade) {
+    return res.status(400).json({ erro: "Colaborador e habilidade são obrigatórios." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO habilidades_colaborador 
+      (colaborador_id, habilidade, nivel)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (colaborador_id, habilidade) 
+      DO UPDATE SET nivel = EXCLUDED.nivel
+      RETURNING *;
+    `;
+
+    const values = [colaborador_id, habilidade, nivel || 3];
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro POST /rh/habilidades:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar habilidade" });
+  }
+});
+
+/**
+ * ROTA: LISTAR HABILIDADES POR COLABORADOR
+ */
+app.get("/api/rh/habilidades/colaborador/:colaboradorId", autenticarToken, async (req, res) => {
+  const { colaboradorId } = req.params;
+
+  try {
+    const query = `
+      SELECT * FROM habilidades_colaborador 
+      WHERE colaborador_id = $1 
+      ORDER BY nivel DESC, habilidade ASC;
+    `;
+    const result = await pool.query(query, [colaboradorId]);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /rh/habilidades/colaborador:", error.message);
+    res.status(500).json({ erro: "Erro ao listar habilidades" });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
