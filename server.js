@@ -4333,6 +4333,395 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 4️⃣ IA DE PRECIFICAÇÃO PRÉ-CONTRATO
+// ========================================
+
+/**
+ * ROTA: CALCULAR PREÇO BASEADO EM ESTIMATIVAS
+ * 
+ * Entrada (dados que o consultor sabe antes do contrato):
+ * - empresa_nome: string
+ * - setor: string (automotivo, metalurgico, alimenticio, quimico, farmaceutico, outros)
+ * - numero_funcionarios: number
+ * - faturamento_anual: number (em R$)
+ * - numero_linhas: number
+ * - problemas: array ['produtividade', 'qualidade', 'manutencao', 'rh']
+ * - urgencia: string ('baixa', 'normal', 'alta')
+ * - complexidade: string ('baixa', 'media', 'alta')
+ * - gestor_dedicado: string ('sim', 'parcial', 'nao')
+ * - acesso_dados: string ('imediato', 'mediado', 'restrito')
+ * - projeto_piloto: boolean
+ * - tem_viagem: boolean
+ */
+app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
+  try {
+    const dados = req.body;
+
+    // ========================================
+    // VALIDAÇÃO DOS DADOS DE ENTRADA
+    // ========================================
+    if (!dados.setor || !dados.faturamento_anual || dados.faturamento_anual <= 0) {
+      return res.status(400).json({ 
+        erro: "Setor e faturamento anual são obrigatórios para precificação." 
+      });
+    }
+
+    // ========================================
+    // BENCHMARKS POR SETOR (DADOS DE MERCADO)
+    // ========================================
+    const benchmarks = {
+      automotivo: { 
+        perda_percentual: 0.22, 
+        oee_medio: 75, 
+        potencial_melhoria: 0.25,
+        horas_diagnostico_por_linha: 35,
+        horas_implementacao_por_linha: 90,
+        fator_aprendizado: 1.0
+      },
+      metalurgico: { 
+        perda_percentual: 0.28, 
+        oee_medio: 68, 
+        potencial_melhoria: 0.30,
+        horas_diagnostico_por_linha: 40,
+        horas_implementacao_por_linha: 100,
+        fator_aprendizado: 1.0
+      },
+      alimenticio: { 
+        perda_percentual: 0.18, 
+        oee_medio: 82, 
+        potencial_melhoria: 0.20,
+        horas_diagnostico_por_linha: 30,
+        horas_implementacao_por_linha: 70,
+        fator_aprendizado: 1.0
+      },
+      quimico: { 
+        perda_percentual: 0.20, 
+        oee_medio: 79, 
+        potencial_melhoria: 0.22,
+        horas_diagnostico_por_linha: 35,
+        horas_implementacao_por_linha: 85,
+        fator_aprendizado: 1.0
+      },
+      farmaceutico: { 
+        perda_percentual: 0.15, 
+        oee_medio: 85, 
+        potencial_melhoria: 0.15,
+        horas_diagnostico_por_linha: 35,
+        horas_implementacao_por_linha: 80,
+        fator_aprendizado: 1.0
+      },
+      outros: { 
+        perda_percentual: 0.25, 
+        oee_medio: 70, 
+        potencial_melhoria: 0.30,
+        horas_diagnostico_por_linha: 35,
+        horas_implementacao_por_linha: 85,
+        fator_aprendizado: 1.0
+      }
+    };
+
+    // ========================================
+    // APRENDIZADO: AJUSTAR BENCHMARKS COM DADOS REAIS DE PROJETOS ANTERIORES
+    // ========================================
+    // Buscar projetos anteriores do mesmo setor para refinar as estimativas
+    try {
+      const projetosAnteriores = await pool.query(`
+        SELECT 
+          e.setor,
+          AVG(pl.refugo_pecas) as media_refugo,
+          AVG(pl.microparadas_minutos) as media_microparadas,
+          COUNT(*) as total_projetos
+        FROM perdas_linha pl
+        JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+        JOIN linha_producao l ON l.id = lp.linha_id
+        JOIN empresas e ON e.id = l.empresa_id
+        WHERE e.setor ILIKE $1
+        GROUP BY e.setor
+      `, [`%${dados.setor}%`]);
+
+      if (projetosAnteriores.rows.length > 0) {
+        const aprendizado = projetosAnteriores.rows[0];
+        // Ajusta o potencial de melhoria baseado em dados reais
+        if (aprendizado.media_refugo > 100) {
+          benchmarks[dados.setor].potencial_melhoria += 0.05;
+        }
+        if (aprendizado.media_microparadas > 200) {
+          benchmarks[dados.setor].potencial_melhoria += 0.05;
+        }
+        console.log(`📊 Aprendizado aplicado: ${aprendizado.total_projetos} projetos anteriores do setor ${dados.setor}`);
+      }
+    } catch (err) {
+      console.log("ℹ️ Sem dados históricos para aprendizado ainda.");
+    }
+
+    const benchmark = benchmarks[dados.setor] || benchmarks.outros;
+    const numeroLinhas = Math.max(1, dados.numero_linhas || 1);
+
+    // ========================================
+    // ESTIMAR PERDAS ATUAIS
+    // ========================================
+    const perdaAnualEstimada = dados.faturamento_anual * benchmark.perda_percentual;
+    const perdaMensalEstimada = perdaAnualEstimada / 12;
+
+    // ========================================
+    // AJUSTAR POTENCIAL DE MELHORIA BASEADO NOS PROBLEMAS
+    // ========================================
+    let fatorComplexidade = 1.0;
+    
+    if (dados.problemas) {
+      if (dados.problemas.includes('produtividade')) fatorComplexidade += 0.05;
+      if (dados.problemas.includes('qualidade')) fatorComplexidade += 0.05;
+      if (dados.problemas.includes('manutencao')) fatorComplexidade += 0.05;
+      if (dados.problemas.includes('rh')) fatorComplexidade += 0.03;
+    }
+    
+    if (dados.complexidade === 'alta') fatorComplexidade += 0.10;
+    if (dados.complexidade === 'baixa') fatorComplexidade -= 0.05;
+    
+    const potencialMelhoria = Math.min(0.35, benchmark.potencial_melhoria * fatorComplexidade);
+    const ganhoAnualEstimado = perdaAnualEstimada * potencialMelhoria;
+    const ganhoMensalEstimado = ganhoAnualEstimado / 12;
+
+    // ========================================
+    // CALCULAR CUSTO DO PROJETO (SEU LADO)
+    // ========================================
+    const seuValorHora = 120; // R$ 120/hora (você pode ajustar depois)
+    
+    let horasDiagnostico = 40 + (benchmark.horas_diagnostico_por_linha * numeroLinhas);
+    let horasImplementacao = 120 + (benchmark.horas_implementacao_por_linha * numeroLinhas);
+    let horasAcompanhamento = 40 + (numeroLinhas * 10);
+    
+    // Ajustes por disponibilidade do cliente
+    if (dados.gestor_dedicado === 'parcial') {
+      horasDiagnostico *= 1.2;
+      horasImplementacao *= 1.2;
+    } else if (dados.gestor_dedicado === 'nao') {
+      horasDiagnostico *= 1.4;
+      horasImplementacao *= 1.4;
+    }
+    
+    if (dados.acesso_dados === 'mediado') {
+      horasDiagnostico *= 1.15;
+    } else if (dados.acesso_dados === 'restrito') {
+      horasDiagnostico *= 1.3;
+    }
+    
+    const totalHoras = horasDiagnostico + horasImplementacao + horasAcompanhamento;
+    const custoDireto = totalHoras * seuValorHora;
+    
+    // Custos variáveis
+    const custoViagem = dados.tem_viagem ? 3000 : 0;
+    const custoMaterial = 1000;
+    const custoVariável = custoViagem + custoMaterial;
+    
+    // Custos indiretos + reserva + margem mínima
+    const custosIndiretos = custoDireto * 0.15;
+    const reservaTecnica = custoDireto * 0.10;
+    const margemMinima = custoDireto * 0.20;
+    
+    const custoTotalMinimo = custoDireto + custoVariável + custosIndiretos + reservaTecnica + margemMinima;
+
+    // ========================================
+    // PREÇO MÁXIMO ÉTICO (30% DO BENEFÍCIO)
+    // ========================================
+    const precoMaximoEtico = ganhoAnualEstimado * 0.30;
+
+    // ========================================
+    // PREÇO IDEAL (EQUILÍBRIO)
+    // ========================================
+    let precoIdeal = custoTotalMinimo * 1.5;
+    
+    if (dados.urgencia === 'alta') precoIdeal *= 1.15;
+    if (dados.urgencia === 'baixa') precoIdeal *= 0.95;
+    if (dados.complexidade === 'alta') precoIdeal *= 1.10;
+    if (dados.complexidade === 'baixa') precoIdeal *= 0.95;
+    if (numeroLinhas > 3) precoIdeal *= 1.10;
+    if (dados.projeto_piloto) precoIdeal *= 0.80;
+    
+    precoIdeal = Math.min(precoIdeal, precoMaximoEtico);
+    precoIdeal = Math.max(precoIdeal, custoTotalMinimo);
+
+    // ========================================
+    // FAIXA DE NEGOCIAÇÃO
+    // ========================================
+    const precoMinimo = Math.round(custoTotalMinimo / 1000) * 1000;
+    const precoIdealArredondado = Math.round(precoIdeal / 1000) * 1000;
+    const precoMaximo = Math.round(precoMaximoEtico / 1000) * 1000;
+
+    // ========================================
+    // INDICADORES DE RETORNO
+    // ========================================
+    const roiCliente = ((ganhoAnualEstimado - precoIdealArredondado) / precoIdealArredondado) * 100;
+    const paybackMeses = precoIdealArredondado / ganhoMensalEstimado;
+
+    // ========================================
+    // GERAR AÇÕES SUGERIDAS
+    // ========================================
+    const acoesSugeridas = [];
+    
+    if (dados.problemas && dados.problemas.includes('produtividade')) {
+      acoesSugeridas.push({
+        titulo: "Redução de Setup e Microparadas",
+        descricao: "Aplicar metodologia SMED e análise de perdas no chão de fábrica",
+        ganho_mensal: Math.round(ganhoMensalEstimado * 0.40),
+        investimento: Math.round(precoIdealArredondado * 0.20),
+        prioridade: "alta"
+      });
+    }
+    
+    if (dados.problemas && dados.problemas.includes('qualidade')) {
+      acoesSugeridas.push({
+        titulo: "Controle Estatístico de Processo (SPC)",
+        descricao: "Implementar controle de qualidade com gráficos de controle e Cpk",
+        ganho_mensal: Math.round(ganhoMensalEstimado * 0.30),
+        investimento: Math.round(precoIdealArredondado * 0.15),
+        prioridade: "alta"
+      });
+    }
+    
+    if (dados.problemas && dados.problemas.includes('manutencao')) {
+      acoesSugeridas.push({
+        titulo: "Manutenção Autônoma e Preventiva",
+        descricao: "Implementar TPM com foco em manutenção autônoma e planejada",
+        ganho_mensal: Math.round(ganhoMensalEstimado * 0.25),
+        investimento: Math.round(precoIdealArredondado * 0.25),
+        prioridade: "media"
+      });
+    }
+    
+    if (dados.problemas && dados.problemas.includes('rh')) {
+      acoesSugeridas.push({
+        titulo: "Treinamento e Desenvolvimento de Equipes",
+        descricao: "Capacitar equipe em ferramentas Lean e melhoria contínua",
+        ganho_mensal: Math.round(ganhoMensalEstimado * 0.15),
+        investimento: Math.round(precoIdealArredondado * 0.10),
+        prioridade: "media"
+      });
+    }
+    
+    if (acoesSugeridas.length === 0) {
+      acoesSugeridas.push({
+        titulo: "Diagnóstico Completo da Operação",
+        descricao: "Mapeamento de fluxo de valor, cronoanálise e identificação de gargalos",
+        ganho_mensal: Math.round(ganhoMensalEstimado * 0.50),
+        investimento: Math.round(precoIdealArredondado * 0.30),
+        prioridade: "alta"
+      });
+    }
+
+    // ========================================
+    // GERAR RESUMO PARA PROPOSTA
+    // ========================================
+    const resumo = `
+📊 ANÁLISE HÓRUS - PRECIFICAÇÃO PRÉ-CONTRATO
+
+Empresa: ${dados.empresa_nome || "Cliente"}
+Setor: ${dados.setor}
+Data: ${new Date().toLocaleDateString('pt-BR')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📈 POTENCIAL IDENTIFICADO
+
+• Perda estimada atual: R$ ${Math.round(perdaMensalEstimada).toLocaleString('pt-BR')}/mês
+• Potencial de redução: ${Math.round(potencialMelhoria * 100)}%
+• Ganho mensal projetado: R$ ${Math.round(ganhoMensalEstimado).toLocaleString('pt-BR')}
+• Ganho anual projetado: R$ ${Math.round(ganhoAnualEstimado).toLocaleString('pt-BR')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💰 INVESTIMENTO SUGERIDO
+
+• Valor total: R$ ${precoIdealArredondado.toLocaleString('pt-BR')}
+• Forma de pagamento: 30% entrada, 40% na entrega do diagnóstico, 30% na conclusão
+
+Faixa de negociação:
+• Mínimo: R$ ${precoMinimo.toLocaleString('pt-BR')}
+• Ideal: R$ ${precoIdealArredondado.toLocaleString('pt-BR')}
+• Máximo: R$ ${precoMaximo.toLocaleString('pt-BR')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 RETORNO PARA SUA EMPRESA
+
+• ROI no primeiro ano: ${roiCliente.toFixed(0)}%
+• Payback: ${paybackMeses.toFixed(1)} meses
+• Sua empresa fica com ${((ganhoAnualEstimado - precoIdealArredondado) / ganhoAnualEstimado * 100).toFixed(0)}% do benefício gerado
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚙️ AÇÕES PRIORITÁRIAS SUGERIDAS
+
+${acoesSugeridas.map((a, i) => `${i+1}. ${a.titulo}
+   • Ganho estimado: R$ ${a.ganho_mensal.toLocaleString('pt-BR')}/mês
+   • Investimento sugerido: R$ ${a.investimento.toLocaleString('pt-BR')}
+   • Prioridade: ${a.prioridade.toUpperCase()}`).join('\n\n')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 PRÓXIMOS PASSOS
+
+1. Agendar reunião de alinhamento
+2. Assinar contrato e dar início ao diagnóstico
+3. Coletar dados reais com a plataforma Hórus
+4. Implementar melhorias e acompanhar resultados
+
+Esta é uma proposta justa e alinhada ao valor que entregaremos.
+    `;
+
+    // ========================================
+    // RETORNAR RESULTADO
+    // ========================================
+    res.status(200).json({
+      status: "sucesso",
+      empresa: dados.empresa_nome || "Cliente",
+      data_calculo: new Date().toISOString(),
+      
+      precos: {
+        minimo: precoMinimo,
+        ideal: precoIdealArredondado,
+        maximo: precoMaximo
+      },
+      
+      detalhamento: {
+        perda_mensal_estimada: Math.round(perdaMensalEstimada),
+        perda_anual_estimada: Math.round(perdaAnualEstimada),
+        ganho_mensal_projetado: Math.round(ganhoMensalEstimado),
+        ganho_anual_projetado: Math.round(ganhoAnualEstimado),
+        potencial_melhoria_percentual: Math.round(potencialMelhoria * 100),
+        horas_estimadas: Math.round(totalHoras),
+        custo_projeto: Math.round(custoTotalMinimo),
+        roi_cliente_percentual: roiCliente.toFixed(0),
+        payback_meses: paybackMeses.toFixed(1),
+        cliente_fica_percentual: ((ganhoAnualEstimado - precoIdealArredondado) / ganhoAnualEstimado * 100).toFixed(0)
+      },
+      
+      acoes_sugeridas: acoesSugeridas,
+      
+      resumo: resumo,
+      
+      dados_para_proposta: {
+        empresa: dados.empresa_nome,
+        honorarios: precoIdealArredondado,
+        perda_mensal: Math.round(perdaMensalEstimada),
+        ganho_mensal: Math.round(ganhoMensalEstimado),
+        roi: roiCliente.toFixed(0),
+        payback: paybackMeses.toFixed(1),
+        setor: dados.setor,
+        linhas: numeroLinhas
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na IA de Precificação:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao processar precificação",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 🟢 NOVOS MÓDULOS: OEE, SPC, TPM, RH
 // ========================================
 
