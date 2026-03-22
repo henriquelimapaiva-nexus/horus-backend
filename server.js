@@ -5842,6 +5842,374 @@ TESTEMUNHAS
 });
 
 // ========================================
+// 📦 EXPORTAR DADOS DA EMPRESA
+// ========================================
+
+app.get("/api/companies/:id/export", autenticarToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Buscar dados da empresa
+    const empresaRes = await pool.query("SELECT * FROM empresas WHERE id = $1", [id]);
+    if (empresaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    // 2. Buscar linhas
+    const linhasRes = await pool.query("SELECT * FROM linhas_producao WHERE empresa_id = $1", [id]);
+
+    // 3. Buscar postos (de todas as linhas da empresa)
+    const postosRes = await pool.query(`
+      SELECT p.* FROM posto_trabalho p
+      JOIN linhas_producao l ON l.id = p.linha_id
+      WHERE l.empresa_id = $1
+    `, [id]);
+
+    // 4. Buscar cargos
+    const cargosRes = await pool.query("SELECT * FROM cargos WHERE empresa_id = $1", [id]);
+
+    // 5. Buscar colaboradores
+    const colaboradoresRes = await pool.query("SELECT * FROM colaborador WHERE empresa_id = $1", [id]);
+
+    // 6. Buscar perdas
+    const perdasRes = await pool.query(`
+      SELECT pl.*, lp.linha_id FROM perdas_linha pl
+      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+      WHERE lp.linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+    `, [id]);
+
+    // 7. Buscar medições de ciclo
+    const medicoesRes = await pool.query(`
+      SELECT cm.* FROM ciclo_medicao cm
+      JOIN posto_trabalho p ON p.id = cm.posto_id
+      JOIN linhas_producao l ON l.id = p.linha_id
+      WHERE l.empresa_id = $1
+    `, [id]);
+
+    // Montar objeto com todos os dados
+    const dados = {
+      metadata: {
+        exportado_em: new Date().toISOString(),
+        empresa_id: parseInt(id),
+        empresa_nome: empresaRes.rows[0].nome,
+        versao: "1.0"
+      },
+      empresa: empresaRes.rows[0],
+      linhas: linhasRes.rows,
+      postos: postosRes.rows,
+      cargos: cargosRes.rows,
+      colaboradores: colaboradoresRes.rows,
+      perdas: perdasRes.rows,
+      medicoes: medicoesRes.rows
+    };
+
+    // Enviar como arquivo para download
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=backup_empresa_${id}_${Date.now()}.json`);
+    res.json(dados);
+
+    console.log(`📦 Backup exportado: Empresa ${empresaRes.rows[0].nome} (ID: ${id})`);
+
+  } catch (error) {
+    console.error("❌ Erro ao exportar dados:", error.message);
+    res.status(500).json({ erro: "Erro ao exportar dados", detalhe: error.message });
+  }
+});
+
+// ========================================
+// 🗑️ LIMPAR DADOS DA EMPRESA (mantém cadastro)
+// ========================================
+
+app.delete("/api/companies/:id/clean", autenticarToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    // Verificar se empresa existe
+    const empresaRes = await pool.query("SELECT nome FROM empresas WHERE id = $1", [id]);
+    if (empresaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    const empresaNome = empresaRes.rows[0].nome;
+
+    await client.query('BEGIN');
+
+    // 1. Remover perdas
+    await client.query(`
+      DELETE FROM perdas_linha WHERE linha_produto_id IN (
+        SELECT id FROM linha_produto WHERE linha_id IN (
+          SELECT id FROM linhas_producao WHERE empresa_id = $1
+        )
+      )
+    `, [id]);
+
+    // 2. Remover medições de ciclo
+    await client.query(`
+      DELETE FROM ciclo_medicao WHERE posto_id IN (
+        SELECT id FROM posto_trabalho WHERE linha_id IN (
+          SELECT id FROM linhas_producao WHERE empresa_id = $1
+        )
+      )
+    `, [id]);
+
+    // 3. Remover análises de linha
+    await client.query(`
+      DELETE FROM analise_linha WHERE linha_id IN (
+        SELECT id FROM linhas_producao WHERE empresa_id = $1
+      )
+    `, [id]);
+
+    // 4. Remover postos
+    await client.query(`
+      DELETE FROM posto_trabalho WHERE linha_id IN (
+        SELECT id FROM linhas_producao WHERE empresa_id = $1
+      )
+    `, [id]);
+
+    // 5. Remover vínculos linha-produto
+    await client.query(`
+      DELETE FROM linha_produto WHERE linha_id IN (
+        SELECT id FROM linhas_producao WHERE empresa_id = $1
+      )
+    `, [id]);
+
+    // 6. Remover linhas
+    await client.query("DELETE FROM linhas_producao WHERE empresa_id = $1", [id]);
+
+    // 7. Remover colaboradores
+    await client.query("DELETE FROM colaborador WHERE empresa_id = $1", [id]);
+
+    // 8. Remover cargos
+    await client.query("DELETE FROM cargos WHERE empresa_id = $1", [id]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      mensagem: `Dados da empresa "${empresaNome}" removidos com sucesso. O cadastro da empresa foi mantido.`
+    });
+
+    console.log(`🗑️ Dados limpos: Empresa ${empresaNome} (ID: ${id})`);
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao limpar dados:", error.message);
+    res.status(500).json({ erro: "Erro ao limpar dados", detalhe: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
+// 💾 FAZER BACKUP DA EMPRESA (salva no banco)
+// ========================================
+
+app.post("/api/companies/:id/backup", autenticarToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motivo } = req.body;
+
+    // Verificar se empresa existe
+    const empresaRes = await pool.query("SELECT nome FROM empresas WHERE id = $1", [id]);
+    if (empresaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    // Buscar todos os dados (mesmo da exportação)
+    const linhas = await pool.query("SELECT * FROM linhas_producao WHERE empresa_id = $1", [id]);
+    const postos = await pool.query(`
+      SELECT p.* FROM posto_trabalho p
+      JOIN linhas_producao l ON l.id = p.linha_id
+      WHERE l.empresa_id = $1
+    `, [id]);
+    const cargos = await pool.query("SELECT * FROM cargos WHERE empresa_id = $1", [id]);
+    const colaboradores = await pool.query("SELECT * FROM colaborador WHERE empresa_id = $1", [id]);
+    const perdas = await pool.query(`
+      SELECT pl.* FROM perdas_linha pl
+      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+      WHERE lp.linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+    `, [id]);
+    const medicoes = await pool.query(`
+      SELECT cm.* FROM ciclo_medicao cm
+      JOIN posto_trabalho p ON p.id = cm.posto_id
+      JOIN linhas_producao l ON l.id = p.linha_id
+      WHERE l.empresa_id = $1
+    `, [id]);
+
+    const dados = {
+      metadata: {
+        backup_em: new Date().toISOString(),
+        empresa_id: parseInt(id),
+        empresa_nome: empresaRes.rows[0].nome,
+        motivo: motivo || "Backup manual",
+        versao: "1.0"
+      },
+      empresa: { id: parseInt(id), nome: empresaRes.rows[0].nome },
+      linhas: linhas.rows,
+      postos: postos.rows,
+      cargos: cargos.rows,
+      colaboradores: colaboradores.rows,
+      perdas: perdas.rows,
+      medicoes: medicoes.rows
+    };
+
+    // Criar tabela de backups se não existir
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS backups_empresas (
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER NOT NULL,
+        dados JSONB NOT NULL,
+        criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        motivo TEXT
+      )
+    `);
+
+    // Inserir backup
+    const result = await pool.query(
+      "INSERT INTO backups_empresas (empresa_id, dados, motivo) VALUES ($1, $2, $3) RETURNING id",
+      [id, JSON.stringify(dados), motivo || "Backup manual"]
+    );
+
+    res.json({
+      mensagem: "Backup realizado com sucesso!",
+      backup_id: result.rows[0].id,
+      data: new Date().toISOString()
+    });
+
+    console.log(`💾 Backup criado: Empresa ${empresaRes.rows[0].nome} (ID: ${id}) - Backup ID: ${result.rows[0].id}`);
+
+  } catch (error) {
+    console.error("❌ Erro ao fazer backup:", error.message);
+    res.status(500).json({ erro: "Erro ao fazer backup", detalhe: error.message });
+  }
+});
+
+// ========================================
+// 📋 LISTAR BACKUPS DE UMA EMPRESA
+// ========================================
+
+app.get("/api/companies/:id/backups", autenticarToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(`
+      SELECT id, criado_em, motivo FROM backups_empresas
+      WHERE empresa_id = $1
+      ORDER BY criado_em DESC
+    `, [id]);
+
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error("❌ Erro ao listar backups:", error.message);
+    res.status(500).json({ erro: "Erro ao listar backups" });
+  }
+});
+
+// ========================================
+// 🔄 RESTAURAR BACKUP
+// ========================================
+
+app.post("/api/companies/:id/restore/:backupId", autenticarToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id, backupId } = req.params;
+
+    // Buscar backup
+    const backupRes = await pool.query(
+      "SELECT dados FROM backups_empresas WHERE id = $1 AND empresa_id = $2",
+      [backupId, id]
+    );
+
+    if (backupRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Backup não encontrado" });
+    }
+
+    const dados = backupRes.rows[0].dados;
+
+    await client.query('BEGIN');
+
+    // Limpar dados atuais (mantém empresa)
+    await client.query("DELETE FROM perdas_linha WHERE linha_produto_id IN (SELECT id FROM linha_produto WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1))", [id]);
+    await client.query("DELETE FROM ciclo_medicao WHERE posto_id IN (SELECT id FROM posto_trabalho WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1))", [id]);
+    await client.query("DELETE FROM analise_linha WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)", [id]);
+    await client.query("DELETE FROM posto_trabalho WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)", [id]);
+    await client.query("DELETE FROM linha_produto WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)", [id]);
+    await client.query("DELETE FROM linhas_producao WHERE empresa_id = $1", [id]);
+    await client.query("DELETE FROM colaborador WHERE empresa_id = $1", [id]);
+    await client.query("DELETE FROM cargos WHERE empresa_id = $1", [id]);
+
+    // Restaurar cargos
+    for (const cargo of dados.cargos) {
+      await client.query(
+        "INSERT INTO cargos (id, empresa_id, nome, salario_base, encargos_percentual) VALUES ($1, $2, $3, $4, $5)",
+        [cargo.id, id, cargo.nome, cargo.salario_base, cargo.encargos_percentual]
+      );
+    }
+
+    // Restaurar linhas
+    for (const linha of dados.linhas) {
+      await client.query(
+        "INSERT INTO linhas_producao (id, empresa_id, nome, takt_time_segundos, meta_diaria, horas_disponiveis) VALUES ($1, $2, $3, $4, $5, $6)",
+        [linha.id, id, linha.nome, linha.takt_time_segundos, linha.meta_diaria, linha.horas_disponiveis || 8.8]
+      );
+    }
+
+    // Restaurar postos
+    for (const posto of dados.postos) {
+      await client.query(
+        "INSERT INTO posto_trabalho (id, linha_id, nome, tempo_ciclo_segundos, tempo_setup_minutos, cargo_id, disponibilidade_percentual, ordem_fluxo) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [posto.id, posto.linha_id, posto.nome, posto.tempo_ciclo_segundos, posto.tempo_setup_minutos, posto.cargo_id, posto.disponibilidade_percentual, posto.ordem_fluxo]
+      );
+    }
+
+    // Restaurar colaboradores
+    for (const colab of dados.colaboradores) {
+      await client.query(
+        "INSERT INTO colaborador (id, empresa_id, cargo_id, nome) VALUES ($1, $2, $3, $4)",
+        [colab.id, id, colab.cargo_id, colab.nome]
+      );
+    }
+
+    // Restaurar perdas
+    for (const perda of dados.perdas) {
+      // Buscar linha_produto_id correspondente
+      const lpRes = await client.query(
+        "SELECT id FROM linha_produto WHERE linha_id = $1",
+        [perda.linha_id]
+      );
+      if (lpRes.rows.length > 0) {
+        await client.query(
+          "INSERT INTO perdas_linha (id, linha_produto_id, microparadas_minutos, retrabalho_pecas, refugo_pecas, data_perda) VALUES ($1, $2, $3, $4, $5, $6)",
+          [perda.id, lpRes.rows[0].id, perda.microparadas_minutos, perda.retrabalho_pecas, perda.refugo_pecas, perda.data_perda]
+        );
+      }
+    }
+
+    // Restaurar medições
+    for (const med of dados.medicoes) {
+      await client.query(
+        "INSERT INTO ciclo_medicao (id, posto_id, tempo_ciclo_segundos, data_medicao) VALUES ($1, $2, $3, $4)",
+        [med.id, med.posto_id, med.tempo_ciclo_segundos, med.data_medicao]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    res.json({ mensagem: "Backup restaurado com sucesso!" });
+
+    console.log(`🔄 Backup restaurado: Empresa ID ${id}, Backup ID ${backupId}`);
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao restaurar backup:", error.message);
+    res.status(500).json({ erro: "Erro ao restaurar backup", detalhe: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
