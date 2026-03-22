@@ -4367,67 +4367,60 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     }
 
     // ========================================
-    // BENCHMARKS POR SETOR (DADOS DE MERCADO)
+    // BENCHMARKS POR SETOR (VERSÃO ÉTICA)
     // ========================================
     const benchmarks = {
       automotivo: { 
-        perda_percentual: 0.22, 
-        oee_medio: 75, 
-        potencial_melhoria: 0.25,
-        horas_diagnostico_por_linha: 35,
-        horas_implementacao_por_linha: 90,
-        fator_aprendizado: 1.0
+        perda_percentual: 0.18, 
+        oee_medio: 78, 
+        potencial_melhoria: 0.15,
+        horas_diagnostico_por_linha: 30,
+        horas_implementacao_por_linha: 70
       },
       metalurgico: { 
-        perda_percentual: 0.28, 
-        oee_medio: 68, 
-        potencial_melhoria: 0.30,
-        horas_diagnostico_por_linha: 40,
-        horas_implementacao_por_linha: 100,
-        fator_aprendizado: 1.0
+        perda_percentual: 0.22, 
+        oee_medio: 72, 
+        potencial_melhoria: 0.18,
+        horas_diagnostico_por_linha: 32,
+        horas_implementacao_por_linha: 75
       },
       alimenticio: { 
-        perda_percentual: 0.18, 
+        perda_percentual: 0.15, 
         oee_medio: 82, 
-        potencial_melhoria: 0.20,
-        horas_diagnostico_por_linha: 30,
-        horas_implementacao_por_linha: 70,
-        fator_aprendizado: 1.0
+        potencial_melhoria: 0.12,
+        horas_diagnostico_por_linha: 25,
+        horas_implementacao_por_linha: 60
       },
       quimico: { 
-        perda_percentual: 0.20, 
-        oee_medio: 79, 
-        potencial_melhoria: 0.22,
-        horas_diagnostico_por_linha: 35,
-        horas_implementacao_por_linha: 85,
-        fator_aprendizado: 1.0
+        perda_percentual: 0.16, 
+        oee_medio: 80, 
+        potencial_melhoria: 0.14,
+        horas_diagnostico_por_linha: 28,
+        horas_implementacao_por_linha: 65
       },
       farmaceutico: { 
-        perda_percentual: 0.15, 
+        perda_percentual: 0.12, 
         oee_medio: 85, 
-        potencial_melhoria: 0.15,
-        horas_diagnostico_por_linha: 35,
-        horas_implementacao_por_linha: 80,
-        fator_aprendizado: 1.0
+        potencial_melhoria: 0.10,
+        horas_diagnostico_por_linha: 28,
+        horas_implementacao_por_linha: 65
       },
       outros: { 
-        perda_percentual: 0.25, 
-        oee_medio: 70, 
-        potencial_melhoria: 0.30,
-        horas_diagnostico_por_linha: 35,
-        horas_implementacao_por_linha: 85,
-        fator_aprendizado: 1.0
+        perda_percentual: 0.18, 
+        oee_medio: 75, 
+        potencial_melhoria: 0.15,
+        horas_diagnostico_por_linha: 30,
+        horas_implementacao_por_linha: 70
       }
     };
 
     // ========================================
     // APRENDIZADO: AJUSTAR BENCHMARKS COM DADOS REAIS DE PROJETOS ANTERIORES
     // ========================================
-    // Buscar projetos anteriores do mesmo setor para refinar as estimativas
     try {
       const projetosAnteriores = await pool.query(`
         SELECT 
-          e.setor,
+          e.segmento as setor,
           AVG(pl.refugo_pecas) as media_refugo,
           AVG(pl.microparadas_minutos) as media_microparadas,
           COUNT(*) as total_projetos
@@ -4435,18 +4428,17 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         JOIN linha_produto lp ON lp.id = pl.linha_produto_id
         JOIN linha_producao l ON l.id = lp.linha_id
         JOIN empresas e ON e.id = l.empresa_id
-        WHERE e.setor ILIKE $1
-        GROUP BY e.setor
+        WHERE e.segmento ILIKE $1
+        GROUP BY e.segmento
       `, [`%${dados.setor}%`]);
 
       if (projetosAnteriores.rows.length > 0) {
         const aprendizado = projetosAnteriores.rows[0];
-        // Ajusta o potencial de melhoria baseado em dados reais
         if (aprendizado.media_refugo > 100) {
-          benchmarks[dados.setor].potencial_melhoria += 0.05;
+          benchmarks[dados.setor].potencial_melhoria += 0.03;
         }
         if (aprendizado.media_microparadas > 200) {
-          benchmarks[dados.setor].potencial_melhoria += 0.05;
+          benchmarks[dados.setor].potencial_melhoria += 0.03;
         }
         console.log(`📊 Aprendizado aplicado: ${aprendizado.total_projetos} projetos anteriores do setor ${dados.setor}`);
       }
@@ -4469,55 +4461,52 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     let fatorComplexidade = 1.0;
     
     if (dados.problemas) {
-      if (dados.problemas.includes('produtividade')) fatorComplexidade += 0.05;
-      if (dados.problemas.includes('qualidade')) fatorComplexidade += 0.05;
-      if (dados.problemas.includes('manutencao')) fatorComplexidade += 0.05;
-      if (dados.problemas.includes('rh')) fatorComplexidade += 0.03;
+      if (dados.problemas.includes('produtividade')) fatorComplexidade += 0.03;
+      if (dados.problemas.includes('qualidade')) fatorComplexidade += 0.03;
+      if (dados.problemas.includes('manutencao')) fatorComplexidade += 0.03;
+      if (dados.problemas.includes('rh')) fatorComplexidade += 0.02;
     }
     
-    if (dados.complexidade === 'alta') fatorComplexidade += 0.10;
+    if (dados.complexidade === 'alta') fatorComplexidade += 0.08;
     if (dados.complexidade === 'baixa') fatorComplexidade -= 0.05;
     
-    const potencialMelhoria = Math.min(0.35, benchmark.potencial_melhoria * fatorComplexidade);
+    const potencialMelhoria = Math.min(0.30, benchmark.potencial_melhoria * fatorComplexidade);
     const ganhoAnualEstimado = perdaAnualEstimada * potencialMelhoria;
     const ganhoMensalEstimado = ganhoAnualEstimado / 12;
 
     // ========================================
-    // CALCULAR CUSTO DO PROJETO (SEU LADO)
+    // CALCULAR CUSTO DO PROJETO
     // ========================================
-    const seuValorHora = 120; // R$ 120/hora (você pode ajustar depois)
+    const seuValorHora = 80;
     
-    let horasDiagnostico = 40 + (benchmark.horas_diagnostico_por_linha * numeroLinhas);
-    let horasImplementacao = 120 + (benchmark.horas_implementacao_por_linha * numeroLinhas);
-    let horasAcompanhamento = 40 + (numeroLinhas * 10);
+    let horasDiagnostico = 30 + (benchmark.horas_diagnostico_por_linha * numeroLinhas);
+    let horasImplementacao = 80 + (benchmark.horas_implementacao_por_linha * numeroLinhas);
+    let horasAcompanhamento = 20 + (numeroLinhas * 5);
     
-    // Ajustes por disponibilidade do cliente
     if (dados.gestor_dedicado === 'parcial') {
-      horasDiagnostico *= 1.2;
-      horasImplementacao *= 1.2;
+      horasDiagnostico *= 1.15;
+      horasImplementacao *= 1.15;
     } else if (dados.gestor_dedicado === 'nao') {
-      horasDiagnostico *= 1.4;
-      horasImplementacao *= 1.4;
+      horasDiagnostico *= 1.3;
+      horasImplementacao *= 1.3;
     }
     
     if (dados.acesso_dados === 'mediado') {
-      horasDiagnostico *= 1.15;
+      horasDiagnostico *= 1.1;
     } else if (dados.acesso_dados === 'restrito') {
-      horasDiagnostico *= 1.3;
+      horasDiagnostico *= 1.2;
     }
     
     const totalHoras = horasDiagnostico + horasImplementacao + horasAcompanhamento;
     const custoDireto = totalHoras * seuValorHora;
     
-    // Custos variáveis
-    const custoViagem = dados.tem_viagem ? 3000 : 0;
-    const custoMaterial = 1000;
+    const custoViagem = dados.tem_viagem ? 2500 : 0;
+    const custoMaterial = 800;
     const custoVariável = custoViagem + custoMaterial;
     
-    // Custos indiretos + reserva + margem mínima
-    const custosIndiretos = custoDireto * 0.15;
-    const reservaTecnica = custoDireto * 0.10;
-    const margemMinima = custoDireto * 0.20;
+    const custosIndiretos = custoDireto * 0.12;
+    const reservaTecnica = custoDireto * 0.08;
+    const margemMinima = custoDireto * 0.12;
     
     const custoTotalMinimo = custoDireto + custoVariável + custosIndiretos + reservaTecnica + margemMinima;
 
@@ -4529,14 +4518,14 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     // PREÇO IDEAL (EQUILÍBRIO)
     // ========================================
-    let precoIdeal = custoTotalMinimo * 1.5;
+    let precoIdeal = custoTotalMinimo * 1.4;
     
-    if (dados.urgencia === 'alta') precoIdeal *= 1.15;
+    if (dados.urgencia === 'alta') precoIdeal *= 1.1;
     if (dados.urgencia === 'baixa') precoIdeal *= 0.95;
-    if (dados.complexidade === 'alta') precoIdeal *= 1.10;
+    if (dados.complexidade === 'alta') precoIdeal *= 1.08;
     if (dados.complexidade === 'baixa') precoIdeal *= 0.95;
-    if (numeroLinhas > 3) precoIdeal *= 1.10;
-    if (dados.projeto_piloto) precoIdeal *= 0.80;
+    if (numeroLinhas > 3) precoIdeal *= 1.05;
+    if (dados.projeto_piloto) precoIdeal *= 0.85;
     
     precoIdeal = Math.min(precoIdeal, precoMaximoEtico);
     precoIdeal = Math.max(precoIdeal, custoTotalMinimo);
@@ -4553,6 +4542,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     const roiCliente = ((ganhoAnualEstimado - precoIdealArredondado) / precoIdealArredondado) * 100;
     const paybackMeses = precoIdealArredondado / ganhoMensalEstimado;
+    const clienteFicaPercentual = ((ganhoAnualEstimado - precoIdealArredondado) / ganhoAnualEstimado * 100);
 
     // ========================================
     // GERAR AÇÕES SUGERIDAS
@@ -4646,7 +4636,7 @@ Faixa de negociação:
 
 • ROI no primeiro ano: ${roiCliente.toFixed(0)}%
 • Payback: ${paybackMeses.toFixed(1)} meses
-• Sua empresa fica com ${((ganhoAnualEstimado - precoIdealArredondado) / ganhoAnualEstimado * 100).toFixed(0)}% do benefício gerado
+• Sua empresa fica com ${clienteFicaPercentual.toFixed(0)}% do benefício gerado
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -4693,7 +4683,7 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
         custo_projeto: Math.round(custoTotalMinimo),
         roi_cliente_percentual: roiCliente.toFixed(0),
         payback_meses: paybackMeses.toFixed(1),
-        cliente_fica_percentual: ((ganhoAnualEstimado - precoIdealArredondado) / ganhoAnualEstimado * 100).toFixed(0)
+        cliente_fica_percentual: clienteFicaPercentual.toFixed(0)
       },
       
       acoes_sugeridas: acoesSugeridas,
