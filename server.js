@@ -4538,6 +4538,15 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     const precoMaximo = Math.round(precoMaximoEtico / 1000) * 1000;
 
     // ========================================
+    // CÁLCULO DO PREÇO DA FASE 1 (DIAGNÓSTICO)
+    // ========================================
+    const precoFase1 = (dados.faturamento_anual * 0.002) + (numeroLinhas * 1500);
+    let precoFase1Arredondado = Math.round(precoFase1 / 1000) * 1000;
+    if (precoFase1Arredondado < 5000) {
+      precoFase1Arredondado = 5000;
+    }
+
+    // ========================================
     // INDICADORES DE RETORNO
     // ========================================
     const roiCliente = ((ganhoAnualEstimado - precoIdealArredondado) / precoIdealArredondado) * 100;
@@ -4670,7 +4679,8 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
       precos: {
         minimo: precoMinimo,
         ideal: precoIdealArredondado,
-        maximo: precoMaximo
+        maximo: precoMaximo,
+        fase1: precoFase1Arredondado
       },
       
       detalhamento: {
