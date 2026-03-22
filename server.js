@@ -5430,8 +5430,6 @@ TESTEMUNHAS:
 
 app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, res) => {
   try {
-    console.log("📥 Recebendo requisição para gerar contrato de implementação");
-    
     const dados = req.body;
 
     if (!dados.empresa_id) {
@@ -5450,15 +5448,56 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
 
     const empresa = empresaRes.rows[0];
 
-    // Buscar linhas da empresa (nome correto: linhas_producao)
+    // Buscar dados para gerar resultados esperados
     const linhasRes = await pool.query(
       "SELECT * FROM linhas_producao WHERE empresa_id = $1",
       [dados.empresa_id]
     );
     const linhas = linhasRes.rows;
 
-    // Dados padrão
-    const valorTotal = dados.valor_total || 50000;
+    let oeeAtual = 0;
+    let perdasTotais = 0;
+    let setupMaior = 0;
+    let totalPostos = 0;
+
+    for (const linha of linhas) {
+      const analiseRes = await pool.query(
+        "SELECT eficiencia_percentual FROM analise_linha WHERE linha_id = $1 ORDER BY data_analise DESC LIMIT 1",
+        [linha.id]
+      );
+      if (analiseRes.rows.length > 0) {
+        oeeAtual += parseFloat(analiseRes.rows[0].eficiencia_percentual);
+      }
+
+      const postosRes = await pool.query(
+        "SELECT * FROM posto_trabalho WHERE linha_id = $1",
+        [linha.id]
+      );
+      totalPostos += postosRes.rows.length;
+
+      for (const posto of postosRes.rows) {
+        if (posto.tempo_setup_minutos > setupMaior) {
+          setupMaior = posto.tempo_setup_minutos;
+        }
+        if (posto.cargo_id) {
+          const cargoRes = await pool.query(
+            "SELECT salario_base, encargos_percentual FROM cargos WHERE id = $1",
+            [posto.cargo_id]
+          );
+          if (cargoRes.rows.length > 0) {
+            const cargo = cargoRes.rows[0];
+            const salario = parseFloat(cargo.salario_base) || 0;
+            const encargos = parseFloat(cargo.encargos_percentual) || 70;
+            const custoMensal = salario * (1 + encargos / 100);
+            perdasTotais += custoMensal * 0.2;
+          }
+        }
+      }
+    }
+
+    oeeAtual = linhas.length > 0 ? oeeAtual / linhas.length : 0;
+    const metaOEE = Math.min(85, Math.round(oeeAtual * 1.2));
+    const valorTotal = dados.valor_total || Math.round(perdasTotais * 0.3 * 12 * 0.4);
     const prazoImplementacao = dados.prazo_implementacao_semanas || 6;
     const prazoAcompanhamento = dados.prazo_acompanhamento_meses || 3;
     const dataAssinatura = dados.data_assinatura || new Date().toLocaleDateString('pt-BR');
@@ -5486,7 +5525,6 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
       }).format(valor);
     };
 
-    // Gerar contrato
     const contrato = `
 CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE CONSULTORIA - FASE 2 (IMPLEMENTAÇÃO) E FASE 3 (ACOMPANHAMENTO)
 
@@ -5497,62 +5535,249 @@ CONTRATADA: NEXUS ENGENHARIA APLICADA, pessoa jurídica de direito privado, insc
 As partes, acima identificadas, têm entre si justo e contratado o seguinte:
 
 
+-------------------------------------------------------------------------------
 CLÁUSULA 1 – OBJETO
+-------------------------------------------------------------------------------
 
-1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, compreendendo as Fases 2 e 3 (Implementação e Acompanhamento), com base nos resultados da Fase 1 (Diagnóstico) previamente concluída.
+1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, compreendendo as Fases 2 e 3, com base nos resultados da Fase 1 (Diagnóstico) previamente concluída.
 
 1.2. FASE 2 – IMPLEMENTAÇÃO (${prazoImplementacao} semanas)
-   a) SMED (Troca Rápida de Ferramentas) nos postos gargalo;
-   b) Balanceamento de Linha;
-   c) Padronização de Processos (POPs);
-   d) Treinamento da Equipe (20 horas);
-   e) Gestão Visual;
-   f) 5S.
+
+   a) SMED (Troca Rápida de Ferramentas): Implementação nos postos gargalo identificados no diagnóstico, visando redução mínima de 50% no tempo de setup;
+
+   b) Balanceamento de Linha: Redistribuição das atividades entre os postos para equalizar a carga de trabalho e eliminar gargalos;
+
+   c) Padronização de Processos: Elaboração e implementação de Procedimentos Operacionais Padrão (POPs) para as atividades críticas;
+
+   d) Treinamento da Equipe: Capacitação dos operadores e lideranças em ferramentas de Manufatura Enxuta (20 horas presenciais);
+
+   e) Gestão Visual: Implantação de quadros de indicadores no chão de fábrica para acompanhamento em tempo real;
+
+   f) 5S: Implementação da metodologia nos postos de trabalho prioritários.
 
 1.3. FASE 3 – ACOMPANHAMENTO (${prazoAcompanhamento} meses)
-   a) Monitoramento Semanal de indicadores;
-   b) Reuniões de acompanhamento;
-   c) Ajustes Finos;
-   d) Transferência de Conhecimento;
-   e) Relatórios Mensais;
-   f) Plano de Sustentação.
+
+   a) Monitoramento Semanal: Acompanhamento dos indicadores (OEE, produtividade, qualidade) com análise de tendências;
+
+   b) Reuniões de Acompanhamento: 1 hora semanal com a liderança para análise de resultados e definição de ações corretivas;
+
+   c) Ajustes Finos: Correções e otimizações nos processos implementados;
+
+   d) Transferência de Conhecimento: Capacitação da equipe interna para sustentar os resultados;
+
+   e) Relatórios Mensais: Documentação da evolução dos indicadores e resultados alcançados;
+
+   f) Plano de Sustentação: Metodologia para manutenção dos ganhos após o término do contrato.
 
 
-CLÁUSULA 2 – VALOR E CONDIÇÕES DE PAGAMENTO
+-------------------------------------------------------------------------------
+CLÁUSULA 2 – RESULTADOS ESPERADOS
+-------------------------------------------------------------------------------
 
-2.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorTotal)} (${valorTotal.toLocaleString('pt-BR')} reais).
+2.1. Com base no diagnóstico realizado na Fase 1, estimamos os seguintes resultados:
 
-2.2. O pagamento será efetuado da seguinte forma:
+   OEE:
+   - Situação atual: ${oeeAtual.toFixed(1)}%
+   - Meta após implementação: ${metaOEE}%
+   - Ganho projetado: ${(metaOEE - oeeAtual).toFixed(1)}%
+
+   Setup (postos gargalo):
+   - Situação atual: ${setupMaior} minutos
+   - Meta após implementação: ${Math.round(setupMaior * 0.5)} minutos
+   - Redução projetada: 50%
+
+   Perdas Totais:
+   - Situação atual: R$ ${perdasTotais.toLocaleString('pt-BR')}/mês
+   - Meta após implementação: R$ ${(perdasTotais * 0.7).toLocaleString('pt-BR')}/mês
+   - Economia projetada: R$ ${(perdasTotais * 0.3).toLocaleString('pt-BR')}/mês
+
+   Indicadores Financeiros:
+   - ROI estimado: ${((perdasTotais * 0.3 * 12 / valorTotal) * 100).toFixed(0)}% ao ano
+   - Payback estimado: ${(valorTotal / (perdasTotais * 0.3)).toFixed(1)} meses
+
+2.2. Os resultados acima são estimativas baseadas no diagnóstico e nas melhores práticas do setor. Os resultados finais serão medidos e documentados ao longo da execução.
+
+2.3. A CONTRATADA não garante percentuais específicos de melhoria, comprometendo-se a empregar as melhores técnicas e esforços para atingir os objetivos.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 3 – OBRIGAÇÕES DA CONTRATADA
+-------------------------------------------------------------------------------
+
+3.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis, observando os padrões éticos e técnicos da profissão.
+
+3.2. Fornecer equipe técnica qualificada e compatível com a natureza dos serviços, sendo a CONTRATADA a única responsável pela sua seleção, supervisão e remuneração.
+
+3.3. Entregar os seguintes documentos:
+   a) Relatório de implementação (ao final da Fase 2);
+   b) Procedimentos Operacionais Padrão (POPs) elaborados;
+   c) Relatórios mensais de acompanhamento (durante a Fase 3);
+   d) Plano de sustentação (ao final da Fase 3).
+
+3.4. Manter absoluto sigilo sobre todas as informações da CONTRATANTE a que tiver acesso, conforme Cláusula 8.
+
+3.5. Informar à CONTRATANTE, por escrito, qualquer fato ou circunstância que possa comprometer a execução dos serviços ou os resultados esperados.
+
+3.6. A responsabilidade da CONTRATADA é de MEIO, não de resultado, não respondendo por resultados específicos que dependam de fatores alheios ao seu controle, tais como:
+   a) Falta de engajamento ou disponibilidade da equipe da CONTRATANTE;
+   b) Recusa da CONTRATANTE em implementar as recomendações;
+   c) Condições operacionais não informadas previamente;
+   d) Fatores externos não previstos.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 4 – OBRIGAÇÕES DA CONTRATANTE
+-------------------------------------------------------------------------------
+
+4.1. Fornecer acesso irrestrito às áreas produtivas, instalações, equipamentos e informações necessárias à execução dos serviços, durante o horário de trabalho normal da CONTRATANTE ou conforme acordado entre as partes.
+
+4.2. Indicar, por escrito, um responsável técnico que atuará como contato oficial durante a vigência do contrato, devendo este ser autorizado a tomar decisões e fornecer informações em nome da CONTRATANTE.
+
+4.3. Disponibilizar, no prazo de 5 (cinco) dias úteis a contar da solicitação da CONTRATADA, todos os dados históricos de produção, manutenção, qualidade e quaisquer outros documentos ou informações que se façam necessários à execução dos serviços.
+
+4.4. Efetuar os pagamentos nas datas e condições estipuladas na Cláusula 5.
+
+4.5. Fornecer, às suas expensas, os equipamentos de proteção individual (EPIs) necessários para que a equipe da CONTRATADA acesse as áreas produtivas, em conformidade com as normas de segurança aplicáveis.
+
+4.6. Comunicar imediatamente à CONTRATADA qualquer alteração nas condições operacionais ou estruturais que possa impactar a execução dos serviços.
+
+4.7. Implementar as recomendações acordadas, sendo de sua inteira responsabilidade os resultados decorrentes da não implementação.
+
+4.8. A CONTRATANTE declara estar ciente de que os resultados da implementação dependem diretamente da qualidade e veracidade das informações fornecidas, assumindo integral responsabilidade por eventuais imprecisões ou omissões.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 5 – VALOR E CONDIÇÕES DE PAGAMENTO
+-------------------------------------------------------------------------------
+
+5.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorTotal)} (${valorTotal.toLocaleString('pt-BR')} reais).
+
+5.2. O pagamento será efetuado da seguinte forma:
    - 40% na assinatura do contrato: ${formatarMoeda(valorTotal * 0.4)}
-   - 40% na entrega da Fase 2: ${formatarMoeda(valorTotal * 0.4)}
-   - 20% na conclusão da Fase 3: ${formatarMoeda(valorTotal * 0.2)}
+   - 40% na entrega da Fase 2 (Implementação): ${formatarMoeda(valorTotal * 0.4)}
+   - 20% na conclusão da Fase 3 (Acompanhamento): ${formatarMoeda(valorTotal * 0.2)}
+
+5.3. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
+   Banco: [BANCO]
+   Agência: [AGÊNCIA]
+   Conta: [CONTA]
+   Titular: NEXUS ENGENHARIA APLICADA
+   CNPJ: [CNPJ DA NEXUS]
+
+5.4. O comprovante de pagamento deverá ser enviado à CONTRATADA por e-mail em até 24 (vinte e quatro) horas após a efetivação, sob pena de suspensão dos serviços até a regularização.
+
+5.5. O atraso no pagamento sujeitará a CONTRATANTE a:
+   a) Multa moratória de 2% (dois por cento) sobre o valor total da parcela em atraso;
+   b) Juros de mora de 1% (um por cento) ao mês, calculados pro rata die;
+   c) Correção monetária pelo índice IPCA (Índice de Preços ao Consumidor Amplo), ou outro índice oficial que venha a substituí-lo, contada da data do vencimento até a data do efetivo pagamento.
+
+5.6. Em caso de inadimplemento, a CONTRATADA poderá suspender imediatamente a execução dos serviços até a regularização do pagamento, sem prejuízo da cobrança dos encargos previstos.
 
 
-CLÁUSULA 3 – PRAZO E VIGÊNCIA
+-------------------------------------------------------------------------------
+CLÁUSULA 6 – PRAZO E VIGÊNCIA
+-------------------------------------------------------------------------------
 
-3.1. O presente contrato terá vigência de ${prazoImplementacao} semanas para a Fase 2, acrescidas de ${prazoAcompanhamento} meses para a Fase 3, contados da data de assinatura.
+6.1. O presente contrato terá vigência de ${prazoImplementacao} semanas para a Fase 2, acrescidas de ${prazoAcompanhamento} meses para a Fase 3, contados da data de assinatura.
 
+6.2. O início dos serviços está condicionado ao pagamento da primeira parcela e à disponibilização das informações e acessos previstos na Cláusula 4.
 
-CLÁUSULA 4 – PROPRIEDADE INTELECTUAL
-
-4.1. Toda a metodologia, know-how, softwares, sistemas (incluindo a plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos e materiais de treinamento utilizados pela CONTRATADA são de sua propriedade exclusiva.
-
-4.2. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 10 (dez) vezes o valor total deste contrato.
-
-
-CLÁUSULA 5 – CONFIDENCIALIDADE
-
-5.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais.
-
-5.2. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento de violação.
+6.3. Os prazos poderão ser ajustados por acordo entre as partes, mediante aditivo contratual.
 
 
-CLÁUSULA 6 – FORO
+-------------------------------------------------------------------------------
+CLÁUSULA 7 – PROPRIEDADE INTELECTUAL
+-------------------------------------------------------------------------------
 
-6.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato.
+7.1. Toda a metodologia, know-how, softwares, sistemas (incluindo, mas não se limitando, à plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos, materiais de treinamento e quaisquer outros ativos intelectuais desenvolvidos ou utilizados pela CONTRATADA são de sua propriedade exclusiva.
+
+7.2. A CONTRATANTE não adquire, por força deste contrato, qualquer direito de propriedade sobre a metodologia, softwares ou ferramentas da CONTRATADA, incluindo, expressamente, a plataforma Hórus.
+
+7.3. É expressamente proibido à CONTRATANTE:
+   a) Copiar, reproduzir, modificar, descompilar ou realizar engenharia reversa da plataforma Hórus ou de qualquer ferramenta da CONTRATADA;
+   b) Utilizar a metodologia da CONTRATADA para prestar serviços a terceiros;
+   c) Reproduzir, no todo ou em parte, os relatórios ou documentos entregues para finalidade diversa daquela para a qual foram elaborados.
+
+7.4. Os relatórios e documentos entregues à CONTRATANTE destinam-se ao seu uso exclusivo no âmbito do objeto contratado, sendo vedada sua divulgação a terceiros sem a prévia e expressa autorização por escrito da CONTRATADA.
+
+7.5. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 10 (dez) vezes o valor total deste contrato, sem prejuízo das perdas e danos e demais sanções cabíveis.
 
 
+-------------------------------------------------------------------------------
+CLÁUSULA 8 – CONFIDENCIALIDADE
+-------------------------------------------------------------------------------
+
+8.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais a que tiverem acesso em razão deste contrato, considerando-se como tais:
+   a) Dados operacionais, financeiros, estratégicos, de produção, qualidade, manutenção, custos e quaisquer informações de negócio da CONTRATANTE;
+   b) Metodologia, softwares, ferramentas, técnicas e know-how da CONTRATADA;
+   c) Qualquer informação expressamente identificada como confidencial.
+
+8.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término deste contrato.
+
+8.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento de violação, sem prejuízo das perdas e danos e demais sanções cabíveis.
+
+8.4. Não se considera violação da confidencialidade a divulgação de informações:
+   a) Exigidas por determinação judicial ou legal;
+   b) Já em domínio público;
+   c) Autorizadas previamente por escrito pela parte titular.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 9 – RESCISÃO
+-------------------------------------------------------------------------------
+
+9.1. O presente contrato poderá ser rescindido por qualquer das partes, mediante notificação por escrito, nas seguintes hipóteses:
+   a) Descumprimento de qualquer cláusula contratual, não sanado no prazo de 15 (quinze) dias úteis após o recebimento da notificação;
+   b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias, sem justa causa;
+   c) Por caso fortuito ou força maior que impeça a execução do objeto, assim reconhecido judicialmente.
+
+9.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 5.1.
+
+9.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá à CONTRATANTE os valores já pagos, atualizados monetariamente, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato.
+
+9.4. Em caso de rescisão por descumprimento da CONTRATANTE, esta pagará à CONTRATADA os serviços já prestados, atualizados monetariamente, e multa de 20% (vinte por cento) sobre o valor total do contrato.
+
+9.5. A rescisão não exonera as partes das obrigações de confidencialidade previstas na Cláusula 8 e das penalidades eventualmente já incorridas.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 10 – PENALIDADES
+-------------------------------------------------------------------------------
+
+10.1. Pelo descumprimento de qualquer obrigação contratual não especificamente penalizada em outras cláusulas, será aplicada multa de 10% (dez por cento) sobre o valor total do contrato, sem prejuízo da obrigação principal.
+
+10.2. As multas previstas neste contrato são independentes e acumuláveis, podendo ser exigidas cumulativamente quando configuradas as respectivas hipóteses.
+
+10.3. A mora de qualquer das partes no cumprimento de suas obrigações sujeitará o infrator à incidência dos encargos previstos na Cláusula 5.5.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 11 – DISPOSIÇÕES GERAIS
+-------------------------------------------------------------------------------
+
+11.1. Este contrato é celebrado em caráter intuitu personae em relação à CONTRATADA, não podendo a CONTRATANTE ceder ou transferir seus direitos e obrigações sem prévia e expressa anuência por escrito da CONTRATADA.
+
+11.2. As comunicações entre as partes serão consideradas válidas quando enviadas por e-mail para os endereços abaixo, ou por correspondência com aviso de recebimento (AR):
+   CONTRATANTE: ${contato.email_contratante}
+   CONTRATADA: ${contato.email_contratada}
+
+11.3. A tolerância quanto ao descumprimento de qualquer cláusula não constituirá novação, renúncia de direitos ou precedente, mantendo-se a exigibilidade das obrigações.
+
+11.4. Qualquer modificação ou aditivo a este contrato deverá ser formalizado por escrito, com anuência de ambas as partes.
+
+11.5. Os títulos das cláusulas são meramente descritivos e não vinculam a interpretação do contrato.
+
+
+-------------------------------------------------------------------------------
+CLÁUSULA 12 – FORO
+-------------------------------------------------------------------------------
+
+12.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
+
+
+-------------------------------------------------------------------------------
 ASSINATURAS
+-------------------------------------------------------------------------------
 
 E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
 
@@ -5598,6 +5823,11 @@ TESTEMUNHAS
       metadata: {
         empresa: empresa.nome,
         valor_total: valorTotal,
+        oee_atual: oeeAtual.toFixed(1),
+        meta_oee: metaOEE,
+        perdas_totais: perdasTotais,
+        roi_estimado: ((perdasTotais * 0.3 * 12 / valorTotal) * 100).toFixed(0),
+        payback_estimado: (valorTotal / (perdasTotais * 0.3)).toFixed(1),
         data_geracao: new Date().toISOString()
       }
     });
