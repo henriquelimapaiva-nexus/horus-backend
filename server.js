@@ -5077,6 +5077,373 @@ app.get("/api/rh/habilidades/colaborador/:colaboradorId", autenticarToken, async
 });
 
 // ========================================
+// 📄 CONTRATO PRÉ-DIAGNÓSTICO (FASE 1)
+// ========================================
+
+/**
+ * ROTA: GERAR CONTRATO PARA NOVO CLIENTE (APENAS FASE 1)
+ * 
+ * Entrada:
+ * - empresa: { nome, cnpj, endereco, cidade, estado }
+ * - representante: { nome, nacionalidade, estado_civil, profissao, rg, cpf, endereco }
+ * - valor_negociado: number
+ * - valor_original_ia: number (opcional, para registro interno)
+ * - prazos: { semanas_diagnostico, meses_vigencia, prazo_entrega_semanas }
+ * - contato: { email_contratante, email_contratada }
+ * - data_assinatura: string
+ */
+app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, res) => {
+  try {
+    const dados = req.body;
+
+    // ========================================
+    // VALIDAÇÃO DOS DADOS OBRIGATÓRIOS
+    // ========================================
+    if (!dados.empresa || !dados.empresa.nome) {
+      return res.status(400).json({ erro: "Dados da empresa são obrigatórios" });
+    }
+
+    if (!dados.valor_negociado || dados.valor_negociado <= 0) {
+      return res.status(400).json({ erro: "Valor negociado é obrigatório" });
+    }
+
+    // ========================================
+    // DADOS PADRÃO (caso não informados)
+    // ========================================
+    const empresa = {
+      nome: dados.empresa.nome || "[NOME DA EMPRESA]",
+      cnpj: dados.empresa.cnpj || "[CNPJ]",
+      endereco: dados.empresa.endereco || "[ENDEREÇO COMPLETO]",
+      cidade: dados.empresa.cidade || "[CIDADE]",
+      estado: dados.empresa.estado || "[UF]"
+    };
+
+    const representante = {
+      nome: dados.representante?.nome || "[NOME DO REPRESENTANTE]",
+      nacionalidade: dados.representante?.nacionalidade || "[NACIONALIDADE]",
+      estado_civil: dados.representante?.estado_civil || "[ESTADO CIVIL]",
+      profissao: dados.representante?.profissao || "[PROFISSÃO]",
+      rg: dados.representante?.rg || "[RG]",
+      cpf: dados.representante?.cpf || "[CPF]",
+      endereco: dados.representante?.endereco || "[ENDEREÇO]"
+    };
+
+    const prazos = {
+      semanas_diagnostico: dados.prazos?.semanas_diagnostico || 4,
+      meses_vigencia: dados.prazos?.meses_vigencia || 2,
+      prazo_entrega_semanas: dados.prazos?.prazo_entrega_semanas || 6
+    };
+
+    const contato = {
+      email_contratante: dados.contato?.email_contratante || "[E-MAIL DA CONTRATANTE]",
+      email_contratada: dados.contato?.email_contratada || "[SEU E-MAIL]"
+    };
+
+    const dataAssinatura = dados.data_assinatura || new Date().toLocaleDateString('pt-BR');
+    const valorNegociado = dados.valor_negociado;
+    const valorOriginalIA = dados.valor_original_ia || null;
+
+    // ========================================
+    // FORMATAÇÃO DE MOEDA
+    // ========================================
+    const formatarMoeda = (valor) => {
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2
+      }).format(valor);
+    };
+
+    // ========================================
+    // GERAR CONTRATO COMPLETO
+    // ========================================
+    const contrato = `
+CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE CONSULTORIA - FASE 1 (DIAGNÓSTICO)
+
+CONTRATANTE: ${empresa.nome}, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº ${empresa.cnpj}, com sede na ${empresa.endereco}, neste ato representada por ${representante.nome}, ${representante.nacionalidade}, ${representante.estado_civil}, ${representante.profissao}, portador do RG nº ${representante.rg} e CPF nº ${representante.cpf}, residente e domiciliado na ${representante.endereco}.
+
+CONTRATADA: NEXUS ENGENHARIA APLICADA, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº [CNPJ DA NEXUS], com sede na [ENDEREÇO DA NEXUS], neste ato representada por [SEU NOME], [NACIONALIDADE], [ESTADO CIVIL], [PROFISSÃO], portador do RG nº [RG] e CPF nº [CPF], residente e domiciliado na [ENDEREÇO].
+
+As partes, acima identificadas, têm entre si justo e contratado o seguinte:
+
+
+CLÁUSULA 1 – OBJETO
+
+1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, limitados à Fase 1 – Diagnóstico, conforme descrito no Anexo I, que passa a fazer parte integrante deste instrumento.
+
+1.2. A Fase 1 compreende exclusivamente:
+   a) Mapeamento do fluxo de valor (VSM) das áreas produtivas indicadas pela CONTRATANTE;
+   b) Coleta e análise de dados operacionais (tempos de ciclo, disponibilidade, qualidade);
+   c) Identificação de gargalos e oportunidades de melhoria;
+   d) Elaboração e entrega de relatório técnico contendo diagnóstico e recomendações.
+
+1.3. Não fazem parte do objeto deste contrato:
+   a) Implementação de qualquer melhoria identificada;
+   b) Acompanhamento pós-diagnóstico;
+   c) Qualquer serviço ou atividade não expressamente previsto no Anexo I.
+
+1.4. Após a entrega e aprovação do relatório de diagnóstico, as partes poderão, mediante aditivo contratual ou novo contrato, estabelecer o escopo, os prazos e os valores para a Fase 2 – Implementação e Fase 3 – Acompanhamento, com base nos dados reais coletados e nas oportunidades identificadas.
+
+
+CLÁUSULA 2 – OBRIGAÇÕES DA CONTRATADA
+
+2.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis, observando os padrões éticos e técnicos da profissão.
+
+2.2. Fornecer equipe técnica qualificada e compatível com a natureza dos serviços, sendo a CONTRATADA a única responsável pela sua seleção, supervisão e remuneração.
+
+2.3. Entregar o relatório de diagnóstico no prazo estipulado na Cláusula 5.
+
+2.4. Manter absoluto sigilo sobre todas as informações da CONTRATANTE a que tiver acesso, conforme Cláusula 7.
+
+2.5. Informar à CONTRATANTE, por escrito, qualquer fato ou circunstância que possa comprometer a execução dos serviços ou os resultados esperados.
+
+2.6. A responsabilidade da CONTRATADA é de MEIO, não de resultado, não respondendo por resultados específicos que dependam de fatores alheios ao seu controle, tais como:
+   a) Falta de engajamento ou disponibilidade da equipe da CONTRATANTE;
+   b) Recusa da CONTRATANTE em implementar as recomendações;
+   c) Condições operacionais não informadas previamente.
+
+
+CLÁUSULA 3 – OBRIGAÇÕES DA CONTRATANTE
+
+3.1. Fornecer acesso irrestrito às áreas produtivas, instalações, equipamentos e informações necessárias à execução dos serviços, durante o horário de trabalho normal da CONTRATANTE ou conforme acordado entre as partes.
+
+3.2. Indicar, por escrito, um responsável técnico que atuará como contato oficial durante a vigência do contrato, devendo este ser autorizado a tomar decisões e fornecer informações em nome da CONTRATANTE.
+
+3.3. Disponibilizar, no prazo de 5 (cinco) dias úteis a contar da solicitação da CONTRATADA, todos os dados históricos de produção, manutenção, qualidade e quaisquer outros documentos ou informações que se façam necessários à execução dos serviços.
+
+3.4. Efetuar os pagamentos nas datas e condições estipuladas na Cláusula 4.
+
+3.5. Fornecer, às suas expensas, os equipamentos de proteção individual (EPIs) necessários para que a equipe da CONTRATADA acesse as áreas produtivas, em conformidade com as normas de segurança aplicáveis.
+
+3.6. Comunicar imediatamente à CONTRATADA qualquer alteração nas condições operacionais ou estruturais que possa impactar a execução dos serviços.
+
+3.7. A CONTRATANTE declara estar ciente de que os resultados do diagnóstico dependem diretamente da qualidade e veracidade das informações fornecidas, assumindo integral responsabilidade por eventuais imprecisões ou omissões.
+
+
+CLÁUSULA 4 – VALOR E CONDIÇÕES DE PAGAMENTO
+
+4.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorNegociado)} (${valorNegociado.toLocaleString('pt-BR')} reais).
+
+${valorOriginalIA ? `\n4.1.1. Registro interno: O valor originalmente calculado pela IA de Precificação Hórus foi de ${formatarMoeda(valorOriginalIA)}, tendo sido ajustado por negociação entre as partes.\n` : ''}
+
+4.2. O pagamento será efetuado em parcela única, na seguinte condição:
+   - Data de assinatura: ${formatarMoeda(valorNegociado)}
+
+4.3. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
+
+   Banco: [BANCO]
+   Agência: [AGÊNCIA]
+   Conta: [CONTA]
+   Titular: NEXUS ENGENHARIA APLICADA
+   CNPJ: [CNPJ DA NEXUS]
+
+4.4. O comprovante de pagamento deverá ser enviado à CONTRATADA por e-mail em até 24 (vinte e quatro) horas após a efetivação, sob pena de suspensão dos serviços até a regularização.
+
+4.5. O atraso no pagamento sujeitará a CONTRATANTE a:
+   a) Multa moratória de 2% (dois por cento) sobre o valor total da parcela em atraso;
+   b) Juros de mora de 1% (um por cento) ao mês, calculados pro rata die;
+   c) Correção monetária pelo índice IPCA (Índice de Preços ao Consumidor Amplo), ou outro índice oficial que venha a substituí-lo, contada da data do vencimento até a data do efetivo pagamento.
+
+4.6. Em caso de inadimplemento, a CONTRATADA poderá suspender imediatamente a execução dos serviços até a regularização do pagamento, sem prejuízo da cobrança dos encargos previstos.
+
+
+CLÁUSULA 5 – PRAZO E VIGÊNCIA
+
+5.1. O presente contrato terá vigência de ${prazos.meses_vigencia} meses, contados da data de assinatura, ou até a entrega do relatório de diagnóstico, o que ocorrer primeiro.
+
+5.2. O início dos serviços está condicionado ao pagamento da parcela prevista na Cláusula 4.2 e à disponibilização das informações e acessos previstos na Cláusula 3.
+
+5.3. O prazo para entrega do relatório de diagnóstico é de ${prazos.prazo_entrega_semanas} semanas, contadas da data de início efetivo dos serviços.
+
+
+CLÁUSULA 6 – PROPRIEDADE INTELECTUAL
+
+6.1. Toda a metodologia, know-how, softwares, sistemas (incluindo, mas não se limitando, à plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos, materiais de treinamento e quaisquer outros ativos intelectuais desenvolvidos ou utilizados pela CONTRATADA na execução dos serviços são de sua propriedade exclusiva, constituindo segredo de negócio.
+
+6.2. A CONTRATANTE não adquire, por força deste contrato, qualquer direito de propriedade sobre a metodologia, softwares ou ferramentas da CONTRATADA, incluindo, expressamente, a plataforma Hórus.
+
+6.3. É expressamente proibido à CONTRATANTE:
+   a) Copiar, reproduzir, modificar, descompilar ou realizar engenharia reversa da plataforma Hórus ou de qualquer ferramenta da CONTRATADA;
+   b) Utilizar a metodologia da CONTRATADA para prestar serviços a terceiros;
+   c) Reproduzir, no todo ou em parte, os relatórios ou documentos entregues para finalidade diversa daquela para a qual foram elaborados.
+
+6.4. Os relatórios e documentos entregues à CONTRATANTE destinam-se ao seu uso exclusivo no âmbito do objeto contratado, sendo vedada sua divulgação a terceiros sem a prévia e expressa autorização por escrito da CONTRATADA.
+
+6.5. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 10 (dez) vezes o valor total deste contrato, sem prejuízo das perdas e danos e demais sanções cabíveis.
+
+
+CLÁUSULA 7 – CONFIDENCIALIDADE
+
+7.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais a que tiverem acesso em razão deste contrato, considerando-se como tais:
+   a) Dados operacionais, financeiros, estratégicos, de produção, qualidade, manutenção, custos e quaisquer informações de negócio da CONTRATANTE;
+   b) Metodologia, softwares, ferramentas, técnicas e know-how da CONTRATADA;
+   c) Qualquer informação expressamente identificada como confidencial.
+
+7.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término deste contrato.
+
+7.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento de violação, sem prejuízo das perdas e danos e demais sanções cabíveis.
+
+7.4. Não se considera violação da confidencialidade a divulgação de informações:
+   a) Exigidas por determinação judicial ou legal;
+   b) Já em domínio público;
+   c) Autorizadas previamente por escrito pela parte titular.
+
+
+CLÁUSULA 8 – RESCISÃO
+
+8.1. O presente contrato poderá ser rescindido por qualquer das partes, mediante notificação por escrito, nas seguintes hipóteses:
+   a) Descumprimento de qualquer cláusula contratual, não sanado no prazo de 15 (quinze) dias úteis após o recebimento da notificação;
+   b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias, sem justa causa;
+   c) Por caso fortuito ou força maior que impeça a execução do objeto, assim reconhecido judicialmente.
+
+8.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 4.1.
+
+8.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá à CONTRATANTE os valores já pagos, atualizados monetariamente, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato.
+
+8.4. Em caso de rescisão por descumprimento da CONTRATANTE, esta pagará à CONTRATADA os serviços já prestados, atualizados monetariamente, e multa de 20% (vinte por cento) sobre o valor total do contrato.
+
+8.5. A rescisão não exonera as partes das obrigações de confidencialidade previstas na Cláusula 7 e das penalidades eventualmente já incorridas.
+
+
+CLÁUSULA 9 – PENALIDADES
+
+9.1. Pelo descumprimento de qualquer obrigação contratual não especificamente penalizada em outras cláusulas, será aplicada multa de 10% (dez por cento) sobre o valor total do contrato, sem prejuízo da obrigação principal.
+
+9.2. As multas previstas neste contrato são independentes e acumuláveis, podendo ser exigidas cumulativamente quando configuradas as respectivas hipóteses.
+
+9.3. A mora de qualquer das partes no cumprimento de suas obrigações sujeitará o infrator à incidência dos encargos previstos na Cláusula 4.5.
+
+
+CLÁUSULA 10 – DISPOSIÇÕES GERAIS
+
+10.1. Este contrato é celebrado em caráter intuitu personae em relação à CONTRATADA, não podendo a CONTRATANTE ceder ou transferir seus direitos e obrigações sem prévia e expressa anuência por escrito da CONTRATADA.
+
+10.2. As comunicações entre as partes serão consideradas válidas quando enviadas por e-mail para os endereços abaixo, ou por correspondência com aviso de recebimento (AR):
+
+   CONTRATANTE: ${contato.email_contratante}
+   CONTRATADA: ${contato.email_contratada}
+
+10.3. A tolerância quanto ao descumprimento de qualquer cláusula não constituirá novação, renúncia de direitos ou precedente, mantendo-se a exigibilidade das obrigações.
+
+10.4. Qualquer modificação ou aditivo a este contrato deverá ser formalizado por escrito, com anuência de ambas as partes.
+
+10.5. Os títulos das cláusulas são meramente descritivos e não vinculam a interpretação do contrato.
+
+
+CLÁUSULA 11 – FORO
+
+11.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
+
+
+ANEXO I – ESCOPO DETALHADO DA FASE 1 (DIAGNÓSTICO)
+
+1. ATIVIDADES
+
+1.1. Reunião de abertura com a liderança da CONTRATANTE para alinhamento de expectativas, cronograma e definição do contato técnico.
+
+1.2. Mapeamento do fluxo de valor (VSM) das áreas produtivas indicadas pela CONTRATANTE, incluindo:
+   a) Identificação de todos os postos de trabalho;
+   b) Levantamento de tempos de ciclo, setup e disponibilidade;
+   c) Mapeamento de fluxo de materiais e informações.
+
+1.3. Coleta e análise de dados operacionais, compreendendo:
+   a) Levantamento de dados históricos de produção (mínimo 30 dias);
+   b) Cronoanálise dos postos de trabalho (mínimo 30 medições por posto);
+   c) Levantamento de perdas (setup, microparadas, refugo, retrabalho);
+   d) Análise de indicadores de qualidade e manutenção.
+
+1.4. Identificação de gargalos e oportunidades de melhoria.
+
+1.5. Elaboração e entrega de relatório técnico contendo:
+   a) Diagnóstico detalhado da situação atual;
+   b) Quantificação das perdas identificadas (em tempo e valor financeiro);
+   c) Identificação de gargalos e pontos críticos;
+   d) Oportunidades de melhoria priorizadas;
+   e) Recomendações técnicas para as Fases 2 e 3 (Implementação e Acompanhamento).
+
+2. ENTREGAS
+
+2.1. Relatório técnico de diagnóstico (formato PDF, mínimo 30 páginas).
+
+2.2. Planilha consolidada de dados coletados (formato Excel).
+
+2.3. Matriz de oportunidades priorizadas.
+
+3. PRAZOS
+
+3.1. O prazo para execução da Fase 1 é de ${prazos.semanas_diagnostico} semanas, contadas da data de início efetivo dos serviços, conforme Cláusula 5.3.
+
+3.2. O cronograma detalhado será apresentado na reunião de abertura e poderá ser ajustado por acordo entre as partes.
+
+
+ASSINATURAS
+
+E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
+
+${empresa.cidade}, ${dataAssinatura}.
+
+
+CONTRATANTE
+${empresa.nome}
+
+_________________________________
+Assinatura
+
+${representante.nome}
+[Cargo]
+
+
+CONTRATADA
+NEXUS ENGENHARIA APLICADA
+
+_________________________________
+Assinatura
+
+[SEU NOME]
+[Cargo]
+
+
+TESTEMUNHAS
+
+1. _________________________________
+   Nome: _______________________________
+   RG: _______________________________
+   CPF: _______________________________
+
+2. _________________________________
+   Nome: _______________________________
+   RG: _______________________________
+   CPF: _______________________________
+`;
+
+    // ========================================
+    // REGISTRAR NO BANCO (OPCIONAL - PARA AUDITORIA)
+    // ========================================
+    // Aqui você pode salvar no banco o contrato gerado, valor original, etc.
+    // Por enquanto, apenas retornamos.
+
+    res.status(200).json({
+      status: "sucesso",
+      contrato: contrato,
+      metadata: {
+        empresa: empresa.nome,
+        valor_negociado: valorNegociado,
+        valor_original_ia: valorOriginalIA,
+        data_geracao: new Date().toISOString(),
+        tipo: "pre-diagnostico"
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao gerar contrato pré-diagnóstico:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao gerar contrato",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
