@@ -5425,6 +5425,282 @@ TESTEMUNHAS:
 });
 
 // ========================================
+// 📄 CONTRATO FASE 2+3 (IMPLEMENTAÇÃO + ACOMPANHAMENTO)
+// ========================================
+
+app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, res) => {
+  try {
+    const dados = req.body;
+
+    if (!dados.empresa_id) {
+      return res.status(400).json({ erro: "ID da empresa é obrigatório" });
+    }
+
+    // Buscar dados da empresa
+    const empresaRes = await pool.query(
+      "SELECT * FROM empresas WHERE id = $1",
+      [dados.empresa_id]
+    );
+
+    if (empresaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    const empresa = empresaRes.rows[0];
+
+    // Buscar dados do diagnóstico
+    const linhasRes = await pool.query(
+      "SELECT * FROM linha_producao WHERE empresa_id = $1",
+      [dados.empresa_id]
+    );
+    const linhas = linhasRes.rows;
+
+    let oeeAtual = 0;
+    let perdasTotais = 0;
+    let setupMaior = 0;
+    let totalPostos = 0;
+
+    for (const linha of linhas) {
+      const analiseRes = await pool.query(
+        "SELECT eficiencia_percentual FROM analise_linha WHERE linha_id = $1 ORDER BY data_analise DESC LIMIT 1",
+        [linha.id]
+      );
+      if (analiseRes.rows.length > 0) {
+        oeeAtual += parseFloat(analiseRes.rows[0].eficiencia_percentual);
+      }
+
+      const postosRes = await pool.query(
+        "SELECT * FROM posto_trabalho WHERE linha_id = $1",
+        [linha.id]
+      );
+      totalPostos += postosRes.rows.length;
+
+      for (const posto of postosRes.rows) {
+        if (posto.tempo_setup_minutos > setupMaior) {
+          setupMaior = posto.tempo_setup_minutos;
+        }
+        if (posto.cargo_id) {
+          const cargoRes = await pool.query(
+            "SELECT salario_base, encargos_percentual FROM cargos WHERE id = $1",
+            [posto.cargo_id]
+          );
+          if (cargoRes.rows.length > 0) {
+            const cargo = cargoRes.rows[0];
+            const salario = parseFloat(cargo.salario_base) || 0;
+            const encargos = parseFloat(cargo.encargos_percentual) || 70;
+            const custoMensal = salario * (1 + encargos / 100);
+            perdasTotais += custoMensal * 0.2;
+          }
+        }
+      }
+    }
+
+    oeeAtual = linhas.length > 0 ? oeeAtual / linhas.length : 0;
+    const metaOEE = Math.min(85, Math.round(oeeAtual * 1.2));
+    const valorTotal = dados.valor_total || Math.round(perdasTotais * 0.3 * 12 * 0.4);
+    const prazoImplementacao = dados.prazo_implementacao_semanas || 6;
+    const prazoAcompanhamento = dados.prazo_acompanhamento_meses || 3;
+    const dataAssinatura = dados.data_assinatura || new Date().toLocaleDateString('pt-BR');
+
+    const representante = {
+      nome: dados.representante?.nome || "[NOME DO REPRESENTANTE]",
+      nacionalidade: dados.representante?.nacionalidade || "[NACIONALIDADE]",
+      estado_civil: dados.representante?.estado_civil || "[ESTADO CIVIL]",
+      profissao: dados.representante?.profissao || "[PROFISSÃO]",
+      rg: dados.representante?.rg || "[RG]",
+      cpf: dados.representante?.cpf || "[CPF]",
+      endereco: dados.representante?.endereco || "[ENDEREÇO]"
+    };
+
+    const contato = {
+      email_contratante: dados.contato?.email_contratante || "[E-MAIL DA CONTRATANTE]",
+      email_contratada: dados.contato?.email_contratada || "[SEU E-MAIL]"
+    };
+
+    const formatarMoeda = (valor) => {
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2
+      }).format(valor);
+    };
+
+    const contrato = `
+CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE CONSULTORIA - FASE 2 (IMPLEMENTAÇÃO) E FASE 3 (ACOMPANHAMENTO)
+
+CONTRATANTE: ${empresa.nome}, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº ${empresa.cnpj || '[CNPJ]'}, com sede na ${empresa.endereco || '[ENDEREÇO]'}, neste ato representada por ${representante.nome}, ${representante.nacionalidade}, ${representante.estado_civil}, ${representante.profissao}, portador do RG nº ${representante.rg} e CPF nº ${representante.cpf}, residente e domiciliado na ${representante.endereco}.
+
+CONTRATADA: NEXUS ENGENHARIA APLICADA, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº [CNPJ DA NEXUS], com sede na [ENDEREÇO DA NEXUS], neste ato representada por [SEU NOME], [NACIONALIDADE], [ESTADO CIVIL], [PROFISSÃO], portador do RG nº [RG] e CPF nº [CPF], residente e domiciliado na [ENDEREÇO].
+
+As partes, acima identificadas, têm entre si justo e contratado o seguinte:
+
+
+CLÁUSULA 1 – OBJETO
+
+1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, compreendendo as Fases 2 e 3, com base nos resultados da Fase 1 (Diagnóstico) previamente concluída.
+
+1.2. FASE 2 – IMPLEMENTAÇÃO (${prazoImplementacao} semanas)
+
+   a) SMED (Troca Rápida de Ferramentas): Implementação nos postos gargalo identificados no diagnóstico, visando redução mínima de 50% no tempo de setup;
+
+   b) Balanceamento de Linha: Redistribuição das atividades entre os postos para equalizar a carga de trabalho;
+
+   c) Padronização de Processos: Elaboração e implementação de Procedimentos Operacionais Padrão (POPs);
+
+   d) Treinamento da Equipe: Capacitação dos operadores e lideranças em ferramentas de Manufatura Enxuta (20 horas presenciais);
+
+   e) Gestão Visual: Implantação de quadros de indicadores no chão de fábrica;
+
+   f) 5S: Implementação da metodologia nos postos de trabalho prioritários.
+
+1.3. FASE 3 – ACOMPANHAMENTO (${prazoAcompanhamento} meses)
+
+   a) Monitoramento Semanal: Acompanhamento dos indicadores (OEE, produtividade, qualidade);
+   b) Reuniões de Acompanhamento: 1 hora semanal com a liderança para análise de resultados;
+   c) Ajustes Finos: Correções e otimizações nos processos implementados;
+   d) Transferência de Conhecimento: Capacitação da equipe interna para sustentar os resultados;
+   e) Relatórios Mensais: Documentação da evolução dos indicadores;
+   f) Plano de Sustentação: Metodologia para manutenção dos ganhos após o término do contrato.
+
+
+CLÁUSULA 2 – RESULTADOS ESPERADOS
+
+2.1. Com base no diagnóstico realizado na Fase 1, estimamos os seguintes resultados:
+
+   - OEE atual: ${oeeAtual.toFixed(1)}% | Meta: ${metaOEE}% | Ganho: ${(metaOEE - oeeAtual).toFixed(1)}%
+   - Setup (postos gargalo): ${setupMaior} min | Meta: ${Math.round(setupMaior * 0.5)} min | Redução: 50%
+   - Perdas Totais: R$ ${perdasTotais.toLocaleString('pt-BR')}/mês | Meta: R$ ${(perdasTotais * 0.7).toLocaleString('pt-BR')}/mês | Economia: R$ ${(perdasTotais * 0.3).toLocaleString('pt-BR')}/mês
+   - ROI estimado: ${((perdasTotais * 0.3 * 12 / valorTotal) * 100).toFixed(0)}% ao ano
+   - Payback estimado: ${(valorTotal / (perdasTotais * 0.3)).toFixed(1)} meses
+
+
+CLÁUSULA 3 – VALOR E CONDIÇÕES DE PAGAMENTO
+
+3.1. O valor total dos serviços objeto deste contrato é de R$ ${valorTotal.toLocaleString('pt-BR')} (${valorTotal.toLocaleString('pt-BR')} reais).
+
+3.2. O pagamento será efetuado da seguinte forma:
+   - 40% na assinatura do contrato: R$ ${(valorTotal * 0.4).toLocaleString('pt-BR')}
+   - 40% na entrega da Fase 2 (Implementação): R$ ${(valorTotal * 0.4).toLocaleString('pt-BR')}
+   - 20% na conclusão da Fase 3 (Acompanhamento): R$ ${(valorTotal * 0.2).toLocaleString('pt-BR')}
+
+3.3. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
+   Banco: [BANCO]
+   Agência: [AGÊNCIA]
+   Conta: [CONTA]
+   Titular: NEXUS ENGENHARIA APLICADA
+   CNPJ: [CNPJ DA NEXUS]
+
+
+CLÁUSULA 4 – PRAZO E VIGÊNCIA
+
+4.1. O presente contrato terá vigência de ${prazoImplementacao} semanas para a Fase 2, acrescidas de ${prazoAcompanhamento} meses para a Fase 3, contados da data de assinatura.
+
+4.2. O início dos serviços está condicionado ao pagamento da primeira parcela.
+
+
+CLÁUSULA 5 – PROPRIEDADE INTELECTUAL
+
+5.1. Toda a metodologia, know-how, softwares, sistemas (incluindo a plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos e materiais de treinamento utilizados pela CONTRATADA são de sua propriedade exclusiva.
+
+5.2. É expressamente proibido à CONTRATANTE:
+   a) Copiar, reproduzir, modificar, descompilar ou realizar engenharia reversa da plataforma Hórus;
+   b) Utilizar a metodologia da CONTRATADA para prestar serviços a terceiros;
+   c) Reproduzir os materiais de treinamento ou documentação para finalidade diversa.
+
+5.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 10 (dez) vezes o valor total deste contrato.
+
+
+CLÁUSULA 6 – CONFIDENCIALIDADE
+
+6.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais.
+
+6.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término deste contrato.
+
+6.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento de violação.
+
+
+CLÁUSULA 7 – RESCISÃO
+
+7.1. O presente contrato poderá ser rescindido nas seguintes hipóteses:
+   a) Descumprimento de qualquer cláusula, não sanado no prazo de 15 dias úteis;
+   b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 dias;
+   c) Por caso fortuito ou força maior.
+
+7.2. Em caso de rescisão unilateral sem justa causa, será devida multa de 20% sobre o saldo remanescente.
+
+7.3. A rescisão não exonera as partes das obrigações de confidencialidade.
+
+
+CLÁUSULA 8 – FORO
+
+8.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato.
+
+
+ASSINATURAS
+
+E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
+
+${empresa.cidade || '[CIDADE]'}, ${dataAssinatura}.
+
+
+CONTRATANTE
+${empresa.nome}
+
+_________________________________
+Assinatura
+
+${representante.nome}
+[Cargo]
+
+
+CONTRATADA
+NEXUS ENGENHARIA APLICADA
+
+_________________________________
+Assinatura
+
+[SEU NOME]
+[Cargo]
+
+
+TESTEMUNHAS
+
+1. _________________________________
+   Nome: _______________________________
+   RG: _______________________________
+   CPF: _______________________________
+
+2. _________________________________
+   Nome: _______________________________
+   RG: _______________________________
+   CPF: _______________________________
+`;
+
+    res.status(200).json({
+      status: "sucesso",
+      contrato: contrato,
+      metadata: {
+        empresa: empresa.nome,
+        valor_total: valorTotal,
+        oee_atual: oeeAtual.toFixed(1),
+        meta_oee: metaOEE,
+        perdas_totais: perdasTotais,
+        roi_estimado: ((perdasTotais * 0.3 * 12 / valorTotal) * 100).toFixed(0),
+        payback_estimado: (valorTotal / (perdasTotais * 0.3)).toFixed(1),
+        data_geracao: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao gerar contrato de implementação:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao gerar contrato",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
