@@ -168,6 +168,10 @@ app.get("/api/companies", autenticarToken, async (req, res) => {
         turnos,
         dias_produtivos_mes,
         meta_mensal,
+        status,
+        valor_contrato,
+        data_inicio,
+        data_previsao_fim,
         criado_em 
       FROM empresas 
       ORDER BY criado_em DESC
@@ -198,7 +202,11 @@ app.post("/api/companies", autenticarToken, async (req, res) => {
     regime_tributario,
     turnos,
     dias_produtivos_mes,
-    meta_mensal
+    meta_mensal,
+    status,
+    valor_contrato,
+    data_inicio,
+    data_previsao_fim
   } = req.body;
 
   // Validação Crítica de Presença
@@ -215,7 +223,11 @@ app.post("/api/companies", autenticarToken, async (req, res) => {
       regime_tributario || 'Outros',
       Math.abs(parseInt(turnos, 10)) || 0,
       Math.abs(parseInt(dias_produtivos_mes, 10)) || 0,
-      Math.abs(parseFloat(meta_mensal)) || 0
+      Math.abs(parseFloat(meta_mensal)) || 0,
+      status || 'diagnostico',
+      Math.abs(parseFloat(valor_contrato)) || 0,
+      data_inicio || null,
+      data_previsao_fim || null
     ];
 
     const query = `
@@ -3510,7 +3522,11 @@ app.put("/api/companies/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const {
     nome, cnpj, segmento, regime_tributario,
-    turnos, dias_produtivos_mes, meta_mensal
+    turnos, dias_produtivos_mes, meta_mensal,
+    status,
+    valor_contrato,
+    data_inicio,
+    data_previsao_fim
   } = req.body;
 
   try {
@@ -3540,7 +3556,12 @@ app.put("/api/companies/:id", autenticarToken, async (req, res) => {
     const values = [
       nome?.trim(), cnpjClean, segmento, regime_tributario,
       parseInt(turnos) || 0, parseInt(dias_produtivos_mes) || 0,
-      parseFloat(meta_mensal) || 0, id
+      parseFloat(meta_mensal) || 0,
+      status,
+      parseFloat(valor_contrato) || 0,
+      data_inicio || null,
+      data_previsao_fim || null,
+      id
     ];
 
     const result = await pool.query(query, values);
