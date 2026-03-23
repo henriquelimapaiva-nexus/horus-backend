@@ -232,8 +232,8 @@ app.post("/api/companies", autenticarToken, async (req, res) => {
 
     const query = `
       INSERT INTO empresas 
-      (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7) 
+      (nome, cnpj, segmento, regime_tributario, turnos, dias_produtivos_mes, meta_mensal, status, valor_contrato, data_inicio, data_previsao_fim) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
       RETURNING *;
     `;
 
