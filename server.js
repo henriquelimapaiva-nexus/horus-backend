@@ -6590,6 +6590,268 @@ app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// ✅ MÓDULO: TAREFAS EDITÁVEIS (DASHBOARD)
+// ========================================
+
+/**
+ * 1️⃣ LISTAR TAREFAS DO CONSULTOR
+ */
+app.get("/api/tarefas", autenticarToken, async (req, res) => {
+  try {
+    const { status, prioridade, categoria, cliente_id, data_inicio, data_fim } = req.query;
+    const usuario_id = req.usuario.id;
+    
+    let query = `
+      SELECT t.*, e.nome as cliente_nome
+      FROM tarefas_consultor t
+      LEFT JOIN empresas e ON e.id = t.cliente_id
+      WHERE t.usuario_id = $1
+    `;
+    
+    const values = [usuario_id];
+    let paramIndex = 2;
+    
+    if (status) {
+      query += ` AND t.status = $${paramIndex}`;
+      values.push(status);
+      paramIndex++;
+    }
+    
+    if (prioridade) {
+      query += ` AND t.prioridade = $${paramIndex}`;
+      values.push(prioridade);
+      paramIndex++;
+    }
+    
+    if (categoria) {
+      query += ` AND t.categoria = $${paramIndex}`;
+      values.push(categoria);
+      paramIndex++;
+    }
+    
+    if (cliente_id) {
+      query += ` AND t.cliente_id = $${paramIndex}`;
+      values.push(cliente_id);
+      paramIndex++;
+    }
+    
+    if (data_inicio) {
+      query += ` AND t.data_limite >= $${paramIndex}`;
+      values.push(data_inicio);
+      paramIndex++;
+    }
+    
+    if (data_fim) {
+      query += ` AND t.data_limite <= $${paramIndex}`;
+      values.push(data_fim);
+      paramIndex++;
+    }
+    
+    query += ` ORDER BY 
+      CASE t.prioridade 
+        WHEN 'alta' THEN 1 
+        WHEN 'media' THEN 2 
+        WHEN 'baixa' THEN 3 
+      END ASC,
+      t.data_limite ASC NULLS LAST,
+      t.created_at DESC`;
+    
+    const result = await pool.query(query, values);
+    res.json(result.rows);
+    
+  } catch (error) {
+    console.error("❌ Erro ao buscar tarefas:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar tarefas" });
+  }
+});
+
+/**
+ * 2️⃣ CRIAR NOVA TAREFA
+ */
+app.post("/api/tarefas", autenticarToken, async (req, res) => {
+  const { titulo, descricao, prioridade, status, data_limite, categoria, cliente_id } = req.body;
+  const usuario_id = req.usuario.id;
+  
+  if (!titulo) {
+    return res.status(400).json({ erro: "Título da tarefa é obrigatório" });
+  }
+  
+  try {
+    const result = await pool.query(`
+      INSERT INTO tarefas_consultor 
+      (usuario_id, titulo, descricao, prioridade, status, data_limite, categoria, cliente_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *
+    `, [
+      usuario_id, titulo, descricao || null,
+      prioridade || 'media', status || 'pendente',
+      data_limite || null, categoria || 'geral', cliente_id || null
+    ]);
+    
+    res.status(201).json(result.rows[0]);
+    
+  } catch (error) {
+    console.error("❌ Erro ao criar tarefa:", error.message);
+    res.status(500).json({ erro: "Erro ao criar tarefa" });
+  }
+});
+
+/**
+ * 3️⃣ ATUALIZAR TAREFA
+ */
+app.put("/api/tarefas/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { titulo, descricao, prioridade, status, data_limite, categoria, cliente_id } = req.body;
+  const usuario_id = req.usuario.id;
+  
+  try {
+    // Verificar se a tarefa pertence ao usuário
+    const checkResult = await pool.query(
+      "SELECT id FROM tarefas_consultor WHERE id = $1 AND usuario_id = $2",
+      [id, usuario_id]
+    );
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ erro: "Tarefa não encontrada" });
+    }
+    
+    // Calcular data_conclusão se status for concluida
+    let dataConclusao = null;
+    if (status === 'concluida') {
+      dataConclusao = new Date().toISOString().split('T')[0];
+    }
+    
+    const result = await pool.query(`
+      UPDATE tarefas_consultor SET
+        titulo = COALESCE($1, titulo),
+        descricao = COALESCE($2, descricao),
+        prioridade = COALESCE($3, prioridade),
+        status = COALESCE($4, status),
+        data_limite = COALESCE($5, data_limite),
+        categoria = COALESCE($6, categoria),
+        cliente_id = COALESCE($7, cliente_id),
+        data_conclusao = COALESCE($8, data_conclusao),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9 AND usuario_id = $10
+      RETURNING *
+    `, [
+      titulo, descricao, prioridade, status,
+      data_limite, categoria, cliente_id, dataConclusao, id, usuario_id
+    ]);
+    
+    res.json(result.rows[0]);
+    
+  } catch (error) {
+    console.error("❌ Erro ao atualizar tarefa:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar tarefa" });
+  }
+});
+
+/**
+ * 4️⃣ ALTERNAR STATUS DA TAREFA (concluir/reabrir)
+ */
+app.patch("/api/tarefas/:id/toggle", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const usuario_id = req.usuario.id;
+  
+  try {
+    // Buscar status atual
+    const tarefa = await pool.query(
+      "SELECT status FROM tarefas_consultor WHERE id = $1 AND usuario_id = $2",
+      [id, usuario_id]
+    );
+    
+    if (tarefa.rows.length === 0) {
+      return res.status(404).json({ erro: "Tarefa não encontrada" });
+    }
+    
+    const novoStatus = tarefa.rows[0].status === 'concluida' ? 'pendente' : 'concluida';
+    const dataConclusao = novoStatus === 'concluida' ? new Date().toISOString().split('T')[0] : null;
+    
+    const result = await pool.query(`
+      UPDATE tarefas_consultor SET
+        status = $1,
+        data_conclusao = $2,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3 AND usuario_id = $4
+      RETURNING *
+    `, [novoStatus, dataConclusao, id, usuario_id]);
+    
+    res.json(result.rows[0]);
+    
+  } catch (error) {
+    console.error("❌ Erro ao alternar status:", error.message);
+    res.status(500).json({ erro: "Erro ao alternar status" });
+  }
+});
+
+/**
+ * 5️⃣ DELETAR TAREFA
+ */
+app.delete("/api/tarefas/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const usuario_id = req.usuario.id;
+  
+  try {
+    const result = await pool.query(
+      "DELETE FROM tarefas_consultor WHERE id = $1 AND usuario_id = $2 RETURNING titulo",
+      [id, usuario_id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Tarefa não encontrada" });
+    }
+    
+    res.json({ mensagem: `Tarefa "${result.rows[0].titulo}" removida com sucesso` });
+    
+  } catch (error) {
+    console.error("❌ Erro ao deletar tarefa:", error.message);
+    res.status(500).json({ erro: "Erro ao deletar tarefa" });
+  }
+});
+
+/**
+ * 6️⃣ RESUMO DE TAREFAS (para o dashboard)
+ */
+app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
+  const usuario_id = req.usuario.id;
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'pendente') as pendentes,
+        COUNT(*) FILTER (WHERE status = 'em_andamento') as em_andamento,
+        COUNT(*) FILTER (WHERE status = 'concluida') as concluidas,
+        COUNT(*) FILTER (WHERE prioridade = 'alta' AND status != 'concluida') as alta_prioridade,
+        COUNT(*) FILTER (WHERE data_limite < CURRENT_DATE AND status != 'concluida') as atrasadas
+      FROM tarefas_consultor
+      WHERE usuario_id = $1
+    `, [usuario_id]);
+    
+    // Buscar próximas tarefas (próximos 7 dias)
+    const proximas = await pool.query(`
+      SELECT id, titulo, data_limite, prioridade
+      FROM tarefas_consultor
+      WHERE usuario_id = $1 
+        AND status != 'concluida'
+        AND data_limite BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+      ORDER BY data_limite ASC, prioridade ASC
+      LIMIT 5
+    `, [usuario_id]);
+    
+    res.json({
+      ...result.rows[0],
+      proximas_tarefas: proximas.rows
+    });
+    
+  } catch (error) {
+    console.error("❌ Erro ao buscar resumo de tarefas:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar resumo" });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
