@@ -6231,6 +6231,74 @@ app.post("/api/companies/:id/restore/:backupId", autenticarToken, async (req, re
 });
 
 // ========================================
+// ⏱️ REGISTRO DE HORAS TRABALHADAS
+// ========================================
+
+// Listar horas do mês atual
+app.get("/api/horas", autenticarToken, async (req, res) => {
+  try {
+    const { ano, mes } = req.query;
+    const anoAtual = ano || new Date().getFullYear();
+    const mesAtual = mes || (new Date().getMonth() + 1);
+    
+    const result = await pool.query(`
+      SELECT * FROM registro_horas 
+      WHERE EXTRACT(YEAR FROM data) = $1 
+      AND EXTRACT(MONTH FROM data) = $2
+      ORDER BY data DESC
+    `, [anoAtual, mesAtual]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro ao buscar horas:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar horas" });
+  }
+});
+
+// Registrar horas trabalhadas
+app.post("/api/horas", autenticarToken, async (req, res) => {
+  const { data, horas, tipo, descricao, projeto_id } = req.body;
+  
+  if (!horas || horas <= 0) {
+    return res.status(400).json({ erro: "Horas é obrigatório e deve ser maior que zero" });
+  }
+  
+  try {
+    const result = await pool.query(`
+      INSERT INTO registro_horas (data, horas, tipo, descricao, projeto_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [data || new Date().toISOString().split('T')[0], horas, tipo || 'faturável', descricao || null, projeto_id || null]);
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro ao registrar horas:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar horas" });
+  }
+});
+
+// Resumo de horas do mês
+app.get("/api/horas/resumo", autenticarToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COALESCE(SUM(horas), 0) as total_horas,
+        COALESCE(SUM(CASE WHEN tipo = 'faturável' THEN horas ELSE 0 END), 0) as horas_faturaveis,
+        COALESCE(SUM(CASE WHEN tipo = 'administrativo' THEN horas ELSE 0 END), 0) as horas_administrativas,
+        COUNT(*) as total_registros
+      FROM registro_horas 
+      WHERE EXTRACT(YEAR FROM data) = EXTRACT(YEAR FROM CURRENT_DATE)
+      AND EXTRACT(MONTH FROM data) = EXTRACT(MONTH FROM CURRENT_DATE)
+    `);
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro ao buscar resumo de horas:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar resumo" });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
