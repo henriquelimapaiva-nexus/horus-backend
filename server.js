@@ -6974,6 +6974,300 @@ app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 📋 MÓDULO: CHECKLIST DE PROJETOS
+// ========================================
+
+/**
+ * 1️⃣ LISTAR PROJETOS POR EMPRESA
+ */
+app.get("/api/checklist/projetos/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM projetos_checklist 
+       WHERE empresa_id = $1 
+       ORDER BY created_at DESC`,
+      [empresaId]
+    );
+
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro ao listar projetos:", error.message);
+    res.status(200).json([]);
+  }
+});
+
+/**
+ * 2️⃣ BUSCAR PROJETO COM FASES E ITENS
+ */
+app.get("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) => {
+  const { projetoId } = req.params;
+
+  try {
+    // Buscar projeto
+    const projetoRes = await pool.query(
+      "SELECT * FROM projetos_checklist WHERE id = $1",
+      [projetoId]
+    );
+
+    if (projetoRes.rowCount === 0) {
+      return res.status(404).json({ erro: "Projeto não encontrado" });
+    }
+
+    const projeto = projetoRes.rows[0];
+
+    // Buscar fases com itens
+    const fasesRes = await pool.query(
+      `SELECT f.*, 
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', i.id,
+              'descricao', i.descricao,
+              'concluido', i.concluido,
+              'ordem', i.ordem,
+              'data_conclusao', i.data_conclusao,
+              'observacao', i.observacao
+            ) ORDER BY i.ordem
+          ) FILTER (WHERE i.id IS NOT NULL), 
+          '[]'
+        ) as itens
+       FROM fases_checklist f
+       LEFT JOIN itens_checklist i ON i.fase_id = f.id
+       WHERE f.projeto_id = $1
+       GROUP BY f.id
+       ORDER BY f.ordem`,
+      [projetoId]
+    );
+
+    res.status(200).json({
+      projeto,
+      fases: fasesRes.rows
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao buscar projeto:", error.message);
+    res.status(500).json({ erro: "Erro ao carregar projeto" });
+  }
+});
+
+/**
+ * 3️⃣ CRIAR PROJETO
+ */
+app.post("/api/checklist/projeto", autenticarToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { empresa_id, nome, data_inicio, data_previsao } = req.body;
+
+    if (!empresa_id || !nome || !data_previsao) {
+      return res.status(400).json({ erro: "Empresa, nome e previsão são obrigatórios." });
+    }
+
+    await client.query('BEGIN');
+
+    // Inserir projeto
+    const projetoRes = await client.query(
+      `INSERT INTO projetos_checklist 
+       (empresa_id, nome, data_inicio, data_previsao, status, progresso) 
+       VALUES ($1, $2, $3, $4, 'em_andamento', 0) 
+       RETURNING *`,
+      [empresa_id, nome, data_inicio || new Date(), data_previsao]
+    );
+    
+    const projeto = projetoRes.rows[0];
+
+    // Criar fases padrão
+    const fases = [
+      { nome: 'Fase 1 - Diagnóstico', ordem: 1 },
+      { nome: 'Fase 2 - Implementação', ordem: 2 },
+      { nome: 'Fase 3 - Sustentação', ordem: 3 }
+    ];
+
+    for (const fase of fases) {
+      await client.query(
+        `INSERT INTO fases_checklist (projeto_id, nome, ordem, status, progresso)
+         VALUES ($1, $2, $3, 'pendente', 0)`,
+        [projeto.id, fase.nome, fase.ordem]
+      );
+    }
+
+    await client.query('COMMIT');
+    
+    res.status(201).json({
+      mensagem: "Projeto criado com sucesso!",
+      projeto
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao criar projeto:", error.message);
+    res.status(500).json({ erro: "Erro ao criar projeto" });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * 4️⃣ ADICIONAR ITEM À FASE
+ */
+app.post("/api/checklist/item", autenticarToken, async (req, res) => {
+  const { fase_id, descricao, ordem } = req.body;
+
+  if (!fase_id || !descricao) {
+    return res.status(400).json({ erro: "Fase e descrição são obrigatórios." });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO itens_checklist (fase_id, descricao, ordem, concluido)
+       VALUES ($1, $2, $3, false)
+       RETURNING *`,
+      [fase_id, descricao, ordem || 1]
+    );
+
+    res.status(201).json({
+      mensagem: "Item adicionado com sucesso!",
+      item: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao adicionar item:", error.message);
+    res.status(500).json({ erro: "Erro ao adicionar item" });
+  }
+});
+
+/**
+ * 5️⃣ ATUALIZAR ITEM (concluir/editar)
+ */
+app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
+  const { itemId } = req.params;
+  const { concluido, descricao } = req.body;
+
+  try {
+    let query, values;
+
+    if (concluido !== undefined) {
+      query = `
+        UPDATE itens_checklist 
+        SET concluido = $1, 
+            data_conclusao = CASE WHEN $1 = true THEN CURRENT_DATE ELSE NULL END
+        WHERE id = $2
+        RETURNING *
+      `;
+      values = [concluido, itemId];
+    } else {
+      query = `
+        UPDATE itens_checklist 
+        SET descricao = $1
+        WHERE id = $2
+        RETURNING *
+      `;
+      values = [descricao, itemId];
+    }
+
+    const result = await pool.query(query, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Item não encontrado" });
+    }
+
+    res.status(200).json({
+      mensagem: "Item atualizado com sucesso!",
+      item: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao atualizar item:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar item" });
+  }
+});
+
+/**
+ * 6️⃣ ATUALIZAR FASE (progresso e status)
+ */
+app.put("/api/checklist/fase/:faseId", autenticarToken, async (req, res) => {
+  const { faseId } = req.params;
+  const { progresso, status } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE fases_checklist 
+       SET progresso = COALESCE($1, progresso),
+           status = COALESCE($2, status)
+       WHERE id = $3
+       RETURNING *`,
+      [progresso, status, faseId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Fase não encontrada" });
+    }
+
+    res.status(200).json({
+      mensagem: "Fase atualizada com sucesso!",
+      fase: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao atualizar fase:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar fase" });
+  }
+});
+
+/**
+ * 7️⃣ DELETAR ITEM
+ */
+app.delete("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
+  const { itemId } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM itens_checklist WHERE id = $1 RETURNING descricao",
+      [itemId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Item não encontrado" });
+    }
+
+    res.status(200).json({
+      mensagem: `Item "${result.rows[0].descricao}" removido com sucesso!`
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao deletar item:", error.message);
+    res.status(500).json({ erro: "Erro ao deletar item" });
+  }
+});
+
+/**
+ * 8️⃣ DELETAR PROJETO
+ */
+app.delete("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) => {
+  const { projetoId } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM projetos_checklist WHERE id = $1 RETURNING nome",
+      [projetoId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Projeto não encontrado" });
+    }
+
+    res.status(200).json({
+      mensagem: `Projeto "${result.rows[0].nome}" removido com sucesso!`
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao deletar projeto:", error.message);
+    res.status(500).json({ erro: "Erro ao deletar projeto" });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
