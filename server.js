@@ -6523,7 +6523,7 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
   const {
     nome, cnpj, contato_nome, contato_email, contato_telefone,
     fonte, status, potencial_faturamento, probabilidade_fechamento,
-    ultimo_contato, proximo_contato, observacoes, consultor_id
+    ultimo_contato, proximo_contato, observacoes
   } = req.body;
   
   if (!nome) {
@@ -6531,6 +6531,12 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
   }
   
   try {
+    // Usar o ID do usuário logado
+    const consultor_id = req.usuario.id;
+    
+    const potencial = parseFloat(potencial_faturamento) || 0;
+    const probabilidade = parseInt(probabilidade_fechamento) || 30;
+    
     const result = await pool.query(`
       INSERT INTO leads (
         nome, cnpj, contato_nome, contato_email, contato_telefone,
@@ -6539,18 +6545,39 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `, [
-      nome, cnpj, contato_nome, contato_email, contato_telefone,
-      fonte || 'indicação', status || 'prospecção',
-      potencial_faturamento || 0, probabilidade_fechamento || 30,
-      ultimo_contato || null, proximo_contato || null,
-      observacoes || null, consultor_id || req.usuario.id
+      nome, 
+      cnpj || null, 
+      contato_nome || null, 
+      contato_email || null, 
+      contato_telefone || null,
+      fonte || 'indicação', 
+      status || 'prospecção',
+      potencial, 
+      probabilidade,
+      ultimo_contato || null, 
+      proximo_contato || null,
+      observacoes || null,
+      consultor_id
     ]);
     
     res.status(201).json(result.rows[0]);
     
   } catch (error) {
     console.error("❌ Erro ao criar lead:", error.message);
-    res.status(500).json({ erro: "Erro ao criar lead" });
+    console.error("Detalhes:", error.stack);
+    
+    // Verificar se é erro de chave estrangeira
+    if (error.code === '23503') {
+      return res.status(400).json({ 
+        erro: "Consultor não encontrado. Faça login novamente.",
+        detalhe: error.message
+      });
+    }
+    
+    res.status(500).json({ 
+      erro: "Erro ao criar lead", 
+      detalhe: error.message 
+    });
   }
 });
 
