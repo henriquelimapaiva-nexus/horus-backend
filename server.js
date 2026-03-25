@@ -6531,9 +6531,6 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
   }
   
   try {
-    // Usar o ID do usuário logado
-    const consultor_id = req.usuario.id;
-    
     const potencial = parseFloat(potencial_faturamento) || 0;
     const probabilidade = parseInt(probabilidade_fechamento) || 30;
     
@@ -6541,8 +6538,8 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
       INSERT INTO leads (
         nome, cnpj, contato_nome, contato_email, contato_telefone,
         fonte, status, potencial_faturamento, probabilidade_fechamento,
-        ultimo_contato, proximo_contato, observacoes, consultor_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ultimo_contato, proximo_contato, observacoes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
     `, [
       nome, 
@@ -6556,28 +6553,14 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
       probabilidade,
       ultimo_contato || null, 
       proximo_contato || null,
-      observacoes || null,
-      consultor_id
+      observacoes || null
     ]);
     
     res.status(201).json(result.rows[0]);
     
   } catch (error) {
     console.error("❌ Erro ao criar lead:", error.message);
-    console.error("Detalhes:", error.stack);
-    
-    // Verificar se é erro de chave estrangeira
-    if (error.code === '23503') {
-      return res.status(400).json({ 
-        erro: "Consultor não encontrado. Faça login novamente.",
-        detalhe: error.message
-      });
-    }
-    
-    res.status(500).json({ 
-      erro: "Erro ao criar lead", 
-      detalhe: error.message 
-    });
+    res.status(500).json({ erro: "Erro ao criar lead", detalhe: error.message });
   }
 });
 
