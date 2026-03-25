@@ -2089,65 +2089,54 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
   const { email, senha } = req.body;
 
   if (!email || !senha) {
-    return res.status(400).json({ erro: "Credenciais incompletas." });
+    return res.status(400).json({ erro: "E-mail e senha são obrigatórios" });
   }
 
-  const emailLimpo = email.trim().toLowerCase();
-
   try {
-    // Busca o usuário
     const result = await pool.query(
-      "SELECT id, nome, email, senha_hash FROM usuarios WHERE email = $1",
-      [emailLimpo]
+      "SELECT id, nome, email, senha, tipo FROM usuarios WHERE email = $1",
+      [email.toLowerCase().trim()]
     );
 
     const usuario = result.rows[0];
 
-    // Segurança por Obscuridade: Se o usuário não existe, ainda assim simulamos um delay 
-    // ou usamos a mesma mensagem genérica para evitar enumeração de usuários.
     if (!usuario) {
-      console.warn(`[AUTH] Tentativa falha: Usuário inexistente - IP: ${req.ip}`);
-      return res.status(401).json({ erro: "E-mail ou senha incorretos." });
+      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
     }
 
-    // Validação da Senha
-    const senhaValida = await bcrypt.compare(senha, usuario.senha_hash);
-
-    if (!senhaValida) {
-      console.warn(`[AUTH] Tentativa falha: Senha incorreta - Usuário: ${emailLimpo} - IP: ${req.ip}`);
-      return res.status(401).json({ erro: "E-mail ou senha incorretos." });
+    if (usuario.senha !== senha) {
+      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
     }
 
-    // Geração do Token JWT (Passaporte)
-    // Payload contém apenas o necessário para identificar o usuário nas rotas.
-    const payload = { 
-      id: usuario.id, 
-      email: usuario.email 
-    };
+    const token = jwt.sign(
+      { 
+        id: usuario.id, 
+        email: usuario.email,
+        tipo: usuario.tipo || 'consultor'
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { 
-      expiresIn: "8h",
-      algorithm: "HS256"
-    });
+    console.log(`✅ Login: ${usuario.email} (ID: ${usuario.id}, Tipo: ${usuario.tipo || 'consultor'})`);
 
-    // Auditoria de login bem-sucedido
-    console.log(`[AUTH] Login realizado: ${emailLimpo}`);
-
-    res.status(200).json({
-      status: "sucesso",
+    res.json({
+      success: true,
       token,
       usuario: {
         id: usuario.id,
         nome: usuario.nome,
-        email: usuario.email
+        email: usuario.email,
+        tipo: usuario.tipo || 'consultor'
       }
     });
 
   } catch (error) {
-    console.error("❌ Erro Crítico no Fluxo de Login:", error.message);
-    res.status(500).json({ erro: "Falha interna no motor de autenticação." });
+    console.error("❌ Erro no login:", error.message);
+    res.status(500).json({ erro: "Erro interno ao fazer login" });
   }
 });
+
 
 // ========================================
 // 📝 MÓDULO: PLANO DE AÇÃO (KAIZEN)
@@ -3619,50 +3608,50 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
 // ========================================
 // 🔑 ROTA DE LOGIN (CONECTADA AO NEON)
 // ========================================
-app.post("/api/login", async (req, res) => {
-  const { email, senha } = req.body;
+//app.post("/api/login", async (req, res) => {
+//  const { email, senha } = req.body;
 
-  try {
+//  try {
     // Buscar usuário no banco
-    const query = "SELECT id, nome, email, senha FROM usuarios WHERE email = $1";
-    const result = await pool.query(query, [email?.toLowerCase().trim()]);
-    const usuario = result.rows[0];
+//    const query = "SELECT id, nome, email, senha FROM usuarios WHERE email = $1";
+//    const result = await pool.query(query, [email?.toLowerCase().trim()]);
+//    const usuario = result.rows[0];
 
-    if (!usuario) {
-      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
-    }
+//    if (!usuario) {
+//      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
+//    }
 
     // Validar senha (use bcrypt se tiver, senão compare direto)
-    const senhaValida = usuario.senha === senha;
+//    const senhaValida = usuario.senha === senha;
     
-    if (!senhaValida) {
-      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
-    }
+//    if (!senhaValida) {
+//      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
+//    }
 
     // Gerar token com o ID REAL do banco
-    const token = jwt.sign(
-      { id: usuario.id, email: usuario.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "24h" }
-    );
+//    const token = jwt.sign(
+//      { id: usuario.id, email: usuario.email },
+//      process.env.JWT_SECRET,
+//      { expiresIn: "24h" }
+//    );
 
-    console.log(`✅ Login bem-sucedido: ${usuario.email} (ID: ${usuario.id})`);
+//    console.log(`✅ Login bem-sucedido: ${usuario.email} (ID: ${usuario.id})`);
 
-    res.json({
-      status: "sucesso",
-      token,
-      usuario: {
-        id: usuario.id,
-        nome: usuario.nome,
-        email: usuario.email
-      }
-    });
+//    res.json({
+//      status: "sucesso",
+//      token,
+//      usuario: {
+//        id: usuario.id,
+//        nome: usuario.nome,
+//        email: usuario.email
+//      }
+//    });
 
-  } catch (error) {
-    console.error("❌ Erro no login:", error.message);
-    res.status(500).json({ erro: "Erro interno ao fazer login" });
-  }
-});
+//  } catch (error) {
+//    console.error("❌ Erro no login:", error.message);
+//    res.status(500).json({ erro: "Erro interno ao fazer login" });
+//  }
+//});
 
 // ========================================
 // 🏢 ROTAS DE NEGÓCIO (SISTEMA HÓRUS)
