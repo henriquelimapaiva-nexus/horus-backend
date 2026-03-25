@@ -7459,10 +7459,16 @@ app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
  */
 
 app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
+
+  console.log("🔥 ROTA INTERACOES FOI CHAMADA");
+
+  // 🚨 TESTE DE DEPLOY (NÃO REMOVE NADA, só interrompe aqui)
+  return res.status(200).json({ teste: "CHEGUEI AQUI" });
+
   const { id } = req.params;
   const { tipo, descricao, data, hora } = req.body;
 
-  console.log("ID USUARIO:", req.usuario?.id); // 👈 AQUI
+  console.log("ID USUARIO:", req.usuario?.id);
 
   if (!tipo) {
     return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
@@ -7479,7 +7485,6 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // 🔍 valida se usuário existe
     const userCheck = await client.query(
       "SELECT id FROM usuarios WHERE id = $1",
       [criado_por]
