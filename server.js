@@ -3624,7 +3624,7 @@ app.post("/api/login", async (req, res) => {
 
   try {
     // Buscar usuário no banco
-    const query = "SELECT id, nome, email, senha_hash FROM usuarios WHERE email = $1";
+    const query = "SELECT id, nome, email, senha FROM usuarios WHERE email = $1";
     const result = await pool.query(query, [email?.toLowerCase().trim()]);
     const usuario = result.rows[0];
 
@@ -3633,7 +3633,7 @@ app.post("/api/login", async (req, res) => {
     }
 
     // Validar senha (use bcrypt se tiver, senão compare direto)
-    const senhaValida = usuario.senha_hash === senha;
+    const senhaValida = usuario.senha === senha;
     
     if (!senhaValida) {
       return res.status(401).json({ erro: "E-mail ou senha inválidos." });
