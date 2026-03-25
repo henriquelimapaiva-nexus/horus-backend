@@ -7470,11 +7470,11 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   try {
     await client.query('BEGIN');
     
-    // Inserir interação
+    // Inserir interação com criado_por
     await client.query(`
-      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null]);
+      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao, criado_por)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null, req.usuario.id]);
     
     // Atualizar último contato do lead
     await client.query(`
