@@ -7459,11 +7459,14 @@ app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
  */
 app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   const { id } = req.params;
-  const { tipo, data, hora, descricao } = req.body;
+  const { tipo, descricao, data, hora } = req.body;
   
   if (!tipo) {
     return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
   }
+  
+  // Usar o ID do consultor logado (vem do middleware autenticarToken)
+  const criado_por = req.usuario.id;
   
   const client = await pool.connect();
   
@@ -7471,30 +7474,43 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
     await client.query('BEGIN');
     
     // Inserir interação com criado_por
-    await client.query(`
-      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao, criado_por)
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null, req.usuario.id]);
+    const query = `
+      INSERT INTO interacoes_leads (lead_id, tipo, descricao, data, hora, criado_por, criado_em)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      RETURNING *
+    `;
+    
+    const values = [
+      id, 
+      tipo, 
+      descricao || null, 
+      data || new Date().toISOString().split('T')[0], 
+      hora || new Date().toLocaleTimeString('pt-BR', { hour12: false }), 
+      criado_por
+    ];
+    
+    const result = await client.query(query, values);
     
     // Atualizar último contato do lead
-    await client.query(`
-      UPDATE leads SET 
+    await client.query(
+      `UPDATE leads SET 
         ultimo_contato = $1,
         data_atualizacao = CURRENT_TIMESTAMP
-      WHERE id = $2
-    `, [data || new Date().toISOString().split('T')[0], id]);
+      WHERE id = $2`,
+      [data || new Date().toISOString().split('T')[0], id]
+    );
     
     await client.query('COMMIT');
     
-    res.status(201).json({ mensagem: "Interação registrada com sucesso" });
+    res.status(201).json(result.rows[0]);
     
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("❌ Erro ao registrar interação:", error.message);
+    console.error("❌ Erro ao registrar interação no Hórus:", error.message);
     console.error("Detalhes:", error.stack);
     res.status(500).json({ 
       erro: "Erro ao registrar interação", 
-      detalhe: error.message 
+      detalhes: error.message 
     });
   } finally {
     client.release();
