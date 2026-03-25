@@ -6984,21 +6984,21 @@ app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 📋 MÓDULO: CHECKLIST DE PROJETOS
+// 🎯 MÓDULO: GESTÃO DE LEADS (PROSPECÇÃO)
 // ========================================
 
 /**
  * 1️⃣ LISTAR TODOS OS LEADS
- * Filtros por status e data
  */
 app.get("/api/leads", autenticarToken, async (req, res) => {
   try {
     const { status, data_inicio, data_fim } = req.query;
     
     let query = `
-      SELECT l.*,
+      SELECT l.*, u.nome as consultor_nome,
         (SELECT COUNT(*) FROM interacoes_leads WHERE lead_id = l.id) as total_interacoes
       FROM leads l
+      LEFT JOIN usuarios u ON l.consultor_id = u.id
       WHERE 1=1
     `;
     
@@ -7030,18 +7030,256 @@ app.get("/api/leads", autenticarToken, async (req, res) => {
     
   } catch (error) {
     console.error("❌ Erro ao buscar leads:", error.message);
-    res.status(500).json({ erro: "Erro ao buscar leads" });
+    res.status(500).json({ erro: "Erro ao buscar leads", detalhes: error.message });
   }
 });
 
 /**
- * 2️⃣ BUSCAR PROJETO COM FASES E ITENS
+ * 2️⃣ CRIAR NOVO LEAD
+ */
+app.post("/api/leads", autenticarToken, async (req, res) => {
+  const {
+    nome, cnpj, contato_nome, contato_email, contato_telefone,
+    fonte, status, potencial_faturamento, probabilidade_fechamento,
+    ultimo_contato, proximo_contato, observacoes
+  } = req.body;
+  
+  if (!nome) {
+    return res.status(400).json({ erro: "Nome do lead é obrigatório" });
+  }
+  
+  try {
+    const potencial = parseFloat(potencial_faturamento) || 0;
+    const probabilidade = parseInt(probabilidade_fechamento) || 30;
+    
+    const result = await pool.query(`
+      INSERT INTO leads (
+        nome, cnpj, contato_nome, contato_email, contato_telefone,
+        fonte, status, potencial_faturamento, probabilidade_fechamento,
+        ultimo_contato, proximo_contato, observacoes, consultor_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *
+    `, [
+      nome, 
+      cnpj || null, 
+      contato_nome || null, 
+      contato_email || null, 
+      contato_telefone || null,
+      fonte || 'indicação', 
+      status || 'prospecção',
+      potencial, 
+      probabilidade,
+      ultimo_contato || null, 
+      proximo_contato || null,
+      observacoes || null,
+      req.usuario.id
+    ]);
+    
+    res.status(201).json(result.rows[0]);
+    
+  } catch (error) {
+    console.error("❌ Erro ao criar lead:", error.message);
+    res.status(500).json({ erro: "Erro ao criar lead", detalhe: error.message });
+  }
+});
+
+/**
+ * 3️⃣ BUSCAR LEAD POR ID
+ */
+app.get("/api/leads/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const leadResult = await pool.query(`
+      SELECT l.*, u.nome as consultor_nome
+      FROM leads l
+      LEFT JOIN usuarios u ON l.consultor_id = u.id
+      WHERE l.id = $1
+    `, [id]);
+    
+    if (leadResult.rows.length === 0) {
+      return res.status(404).json({ erro: "Lead não encontrado" });
+    }
+    
+    const interacoesResult = await pool.query(`
+      SELECT * FROM interacoes_leads 
+      WHERE lead_id = $1
+      ORDER BY data DESC, hora DESC
+    `, [id]);
+    
+    res.json({
+      ...leadResult.rows[0],
+      interacoes: interacoesResult.rows
+    });
+    
+  } catch (error) {
+    console.error("❌ Erro ao buscar lead:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar lead" });
+  }
+});
+
+/**
+ * 4️⃣ ATUALIZAR LEAD
+ */
+app.put("/api/leads/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const {
+    nome, cnpj, contato_nome, contato_email, contato_telefone,
+    fonte, status, potencial_faturamento, probabilidade_fechamento,
+    ultimo_contato, proximo_contato, observacoes
+  } = req.body;
+  
+  try {
+    const result = await pool.query(`
+      UPDATE leads SET
+        nome = COALESCE($1, nome),
+        cnpj = COALESCE($2, cnpj),
+        contato_nome = COALESCE($3, contato_nome),
+        contato_email = COALESCE($4, contato_email),
+        contato_telefone = COALESCE($5, contato_telefone),
+        fonte = COALESCE($6, fonte),
+        status = COALESCE($7, status),
+        potencial_faturamento = COALESCE($8, potencial_faturamento),
+        probabilidade_fechamento = COALESCE($9, probabilidade_fechamento),
+        ultimo_contato = COALESCE($10, ultimo_contato),
+        proximo_contato = COALESCE($11, proximo_contato),
+        observacoes = COALESCE($12, observacoes),
+        data_atualizacao = CURRENT_TIMESTAMP
+      WHERE id = $13
+      RETURNING *
+    `, [
+      nome, cnpj, contato_nome, contato_email, contato_telefone,
+      fonte, status, potencial_faturamento, probabilidade_fechamento,
+      ultimo_contato, proximo_contato, observacoes, id
+    ]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Lead não encontrado" });
+    }
+    
+    res.json(result.rows[0]);
+    
+  } catch (error) {
+    console.error("❌ Erro ao atualizar lead:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar lead" });
+  }
+});
+
+/**
+ * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD
+ */
+app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { tipo, data, hora, descricao } = req.body;
+  
+  if (!tipo) {
+    return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
+  }
+  
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    await client.query(`
+      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null]);
+    
+    await client.query(`
+      UPDATE leads SET 
+        ultimo_contato = COALESCE($1, ultimo_contato),
+        data_atualizacao = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [data || new Date().toISOString().split('T')[0], id]);
+    
+    await client.query('COMMIT');
+    
+    res.status(201).json({ mensagem: "Interação registrada com sucesso" });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao registrar interação:", error.message);
+    res.status(500).json({ erro: "Erro ao registrar interação" });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * 6️⃣ DELETAR LEAD
+ */
+app.delete("/api/leads/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const result = await pool.query(
+      "DELETE FROM leads WHERE id = $1 RETURNING nome",
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Lead não encontrado" });
+    }
+    
+    res.json({ mensagem: `Lead "${result.rows[0].nome}" removido com sucesso` });
+    
+  } catch (error) {
+    console.error("❌ Erro ao deletar lead:", error.message);
+    res.status(500).json({ erro: "Erro ao deletar lead" });
+  }
+});
+
+/**
+ * 7️⃣ DASHBOARD DE LEADS (MÉTRICAS)
+ */
+app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
+  try {
+    const metrics = await pool.query(`
+      SELECT 
+        COUNT(*) as total_leads,
+        COUNT(*) FILTER (WHERE status = 'prospecção') as em_prospeccao,
+        COUNT(*) FILTER (WHERE status = 'contato_inicial') as contato_inicial,
+        COUNT(*) FILTER (WHERE status = 'proposta_enviada') as proposta_enviada,
+        COUNT(*) FILTER (WHERE status = 'negociação') as negociacao,
+        COUNT(*) FILTER (WHERE status = 'fechado') as fechados,
+        COUNT(*) FILTER (WHERE status = 'perdido') as perdidos,
+        COALESCE(SUM(potencial_faturamento) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_total,
+        COALESCE(SUM(potencial_faturamento * probabilidade_fechamento / 100) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_ponderado
+      FROM leads
+    `);
+    
+    const proximosContatos = await pool.query(`
+      SELECT id, nome, proximo_contato, contato_nome, contato_telefone
+      FROM leads
+      WHERE proximo_contato BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+      AND status NOT IN ('fechado', 'perdido')
+      ORDER BY proximo_contato ASC
+      LIMIT 10
+    `);
+    
+    res.json({
+      ...metrics.rows[0],
+      proximos_contatos: proximosContatos.rows
+    });
+    
+  } catch (error) {
+    console.error("❌ Erro ao buscar métricas de leads:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar métricas" });
+  }
+});
+
+// ========================================
+// 📋 MÓDULO: CHECKLIST DE PROJETOS
+// ========================================
+
+/**
+ * 1️⃣ BUSCAR PROJETO COM FASES E ITENS
  */
 app.get("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) => {
   const { projetoId } = req.params;
 
   try {
-    // Buscar projeto
     const projetoRes = await pool.query(
       "SELECT * FROM projetos_checklist WHERE id = $1",
       [projetoId]
@@ -7053,7 +7291,6 @@ app.get("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) =
 
     const projeto = projetoRes.rows[0];
 
-    // Buscar fases com itens
     const fasesRes = await pool.query(
       `SELECT f.*, 
         COALESCE(
@@ -7089,7 +7326,7 @@ app.get("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) =
 });
 
 /**
- * 3️⃣ CRIAR PROJETO
+ * 2️⃣ CRIAR PROJETO
  */
 app.post("/api/checklist/projeto", autenticarToken, async (req, res) => {
   const client = await pool.connect();
@@ -7102,7 +7339,6 @@ app.post("/api/checklist/projeto", autenticarToken, async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Inserir projeto
     const projetoRes = await client.query(
       `INSERT INTO projetos_checklist 
        (empresa_id, nome, data_inicio, data_previsao, status, progresso) 
@@ -7113,7 +7349,6 @@ app.post("/api/checklist/projeto", autenticarToken, async (req, res) => {
     
     const projeto = projetoRes.rows[0];
 
-    // Criar fases padrão
     const fases = [
       { nome: 'Fase 1 - Diagnóstico', ordem: 1 },
       { nome: 'Fase 2 - Implementação', ordem: 2 },
@@ -7145,7 +7380,7 @@ app.post("/api/checklist/projeto", autenticarToken, async (req, res) => {
 });
 
 /**
- * 4️⃣ ADICIONAR ITEM À FASE
+ * 3️⃣ ADICIONAR ITEM À FASE
  */
 app.post("/api/checklist/item", autenticarToken, async (req, res) => {
   const { fase_id, descricao, ordem } = req.body;
@@ -7174,7 +7409,7 @@ app.post("/api/checklist/item", autenticarToken, async (req, res) => {
 });
 
 /**
- * 5️⃣ ATUALIZAR ITEM (concluir/editar)
+ * 4️⃣ ATUALIZAR ITEM (concluir/editar)
  */
 app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
   const { itemId } = req.params;
@@ -7220,7 +7455,7 @@ app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
 });
 
 /**
- * 6️⃣ ATUALIZAR FASE (progresso e status)
+ * 5️⃣ ATUALIZAR FASE (progresso e status)
  */
 app.put("/api/checklist/fase/:faseId", autenticarToken, async (req, res) => {
   const { faseId } = req.params;
@@ -7252,47 +7487,7 @@ app.put("/api/checklist/fase/:faseId", autenticarToken, async (req, res) => {
 });
 
 /**
- * 7️⃣ DASHBOARD DE LEADS (MÉTRICAS)
- */
-app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
-  try {
-    const metrics = await pool.query(`
-      SELECT 
-        COUNT(*) as total_leads,
-        COUNT(*) FILTER (WHERE status = 'prospecção') as em_prospeccao,
-        COUNT(*) FILTER (WHERE status = 'contato_inicial') as contato_inicial,
-        COUNT(*) FILTER (WHERE status = 'proposta_enviada') as proposta_enviada,
-        COUNT(*) FILTER (WHERE status = 'negociação') as negociacao,
-        COUNT(*) FILTER (WHERE status = 'fechado') as fechados,
-        COUNT(*) FILTER (WHERE status = 'perdido') as perdidos,
-        COALESCE(SUM(potencial_faturamento) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_total,
-        COALESCE(SUM(potencial_faturamento * probabilidade_fechamento / 100) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_ponderado
-      FROM leads
-    `);
-    
-    // Leads com próximos contatos nos próximos 7 dias
-    const proximosContatos = await pool.query(`
-      SELECT id, nome, proximo_contato, contato_nome, contato_telefone
-      FROM leads
-      WHERE proximo_contato BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-      AND status NOT IN ('fechado', 'perdido')
-      ORDER BY proximo_contato ASC
-      LIMIT 10
-    `);
-    
-    res.json({
-      ...metrics.rows[0],
-      proximos_contatos: proximosContatos.rows
-    });
-    
-  } catch (error) {
-    console.error("❌ Erro ao buscar métricas de leads:", error.message);
-    res.status(500).json({ erro: "Erro ao buscar métricas" });
-  }
-});
-
-/**
- * 8️⃣ DELETAR PROJETO
+ * 6️⃣ DELETAR PROJETO
  */
 app.delete("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res) => {
   const { projetoId } = req.params;
