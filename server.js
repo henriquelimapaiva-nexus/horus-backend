@@ -7455,34 +7455,49 @@ app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
 });
 
 /**
- * 5️⃣ ATUALIZAR FASE (progresso e status)
+ * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD
  */
-app.put("/api/checklist/fase/:faseId", autenticarToken, async (req, res) => {
-  const { faseId } = req.params;
-  const { progresso, status } = req.body;
-
+app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { tipo, data, hora, descricao } = req.body;
+  
+  if (!tipo) {
+    return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
+  }
+  
+  const client = await pool.connect();
+  
   try {
-    const result = await pool.query(
-      `UPDATE fases_checklist 
-       SET progresso = COALESCE($1, progresso),
-           status = COALESCE($2, status)
-       WHERE id = $3
-       RETURNING *`,
-      [progresso, status, faseId]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ erro: "Fase não encontrada" });
-    }
-
-    res.status(200).json({
-      mensagem: "Fase atualizada com sucesso!",
-      fase: result.rows[0]
-    });
-
+    await client.query('BEGIN');
+    
+    // Inserir interação
+    await client.query(`
+      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null]);
+    
+    // Atualizar último contato do lead
+    await client.query(`
+      UPDATE leads SET 
+        ultimo_contato = $1,
+        data_atualizacao = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [data || new Date().toISOString().split('T')[0], id]);
+    
+    await client.query('COMMIT');
+    
+    res.status(201).json({ mensagem: "Interação registrada com sucesso" });
+    
   } catch (error) {
-    console.error("❌ Erro ao atualizar fase:", error.message);
-    res.status(500).json({ erro: "Erro ao atualizar fase" });
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao registrar interação:", error.message);
+    console.error("Detalhes:", error.stack);
+    res.status(500).json({ 
+      erro: "Erro ao registrar interação", 
+      detalhe: error.message 
+    });
+  } finally {
+    client.release();
   }
 });
 
