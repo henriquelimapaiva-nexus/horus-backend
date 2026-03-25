@@ -10,6 +10,9 @@ const bcrypt = require('bcrypt');
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'nexus_secret_key_2026';
 
+// TRUST PROXY - NECESSÁRIO PARA RENDER
+app.set('trust proxy', 1);
+
 // ========================================
 // 🛡️ CAMADA DE SEGURANÇA (HELMET & CORS)
 // ========================================
@@ -96,36 +99,30 @@ const loginLimiter = rateLimit({
 function autenticarToken(req, res, next) {
   const authHeader = req.headers["authorization"];
 
-  // 1. Verifica se o header existe e segue o padrão "Bearer <TOKEN>"
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.warn(`[SECURITY] Acesso negado: Header ausente ou malformado - IP: ${req.ip}`);
-    return res.status(401).json({ 
-      erro: "Acesso negado", 
-      detalhe: "Token não fornecido ou formato inválido" 
-    });
+    return res.status(401).json({ erro: "Token não fornecido" });
   }
 
   const token = authHeader.split(" ")[1];
 
-  // 2. Validação Crítica do Token usando a chave mestra
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
-      const mensagemErro = err.name === "TokenExpiredError" 
-        ? "Sessão expirada. Faça login novamente." 
-        : "Token de autenticação inválido.";
-      
-      console.warn(`[SECURITY] Falha na validação JWT: ${err.message} - IP: ${req.ip}`);
-      return res.status(403).json({ erro: mensagemErro });
+      console.error("❌ Token inválido:", err.message);
+      return res.status(403).json({ erro: "Token inválido ou expirado" });
     }
 
-    // 3. Injeção de Contexto (ID e Email para as próximas rotas)
+    // Garantir que o ID existe
+    if (!decoded.id) {
+      return res.status(403).json({ erro: "Token não contém ID de usuário" });
+    }
+
     req.usuario = {
       id: decoded.id,
-      email: decoded.email,
-      nivel: decoded.nivel || 'consultor'
+      email: decoded.email
     };
     
-    next(); 
+    console.log(`🔑 Token válido - Usuário ID: ${req.usuario.id}`);
+    next();
   });
 }
 
@@ -3626,37 +3623,44 @@ app.post("/api/login", async (req, res) => {
   const { email, senha } = req.body;
 
   try {
-    // 1. Busca real no banco de dados Neon
-    const query = "SELECT * FROM usuarios WHERE email = $1";
+    // Buscar usuário no banco
+    const query = "SELECT id, nome, email, senha_hash FROM usuarios WHERE email = $1";
     const result = await pool.query(query, [email?.toLowerCase().trim()]);
     const usuario = result.rows[0];
 
-    // 2. Validação de segurança
-    if (usuario && usuario.senha === senha) {
-      
-      // 3. Criação do Token JWT com os dados reais do banco
-      const token = jwt.sign(
-        { id: usuario.id, email: usuario.email, nivel: usuario.nivel }, 
-        process.env.JWT_SECRET, 
-        { expiresIn: "8h" }
-      );
-
-      console.log(`[AUTH] Login real bem-sucedido: ${usuario.email}`);
-
-      return res.json({
-        status: "sucesso",
-        mensagem: `Bem-vindo ao Sistema Hórus, ${usuario.nome.split(' ')[0]}.`,
-        token: token
-      });
+    if (!usuario) {
+      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
     }
 
-    // 4. Falha na autenticação
-    console.warn(`[SECURITY] Tentativa de login inválida: ${email}`);
-    return res.status(401).json({ erro: "E-mail ou senha inválidos." });
+    // Validar senha (use bcrypt se tiver, senão compare direto)
+    const senhaValida = usuario.senha_hash === senha;
+    
+    if (!senhaValida) {
+      return res.status(401).json({ erro: "E-mail ou senha inválidos." });
+    }
+
+    // Gerar token com o ID REAL do banco
+    const token = jwt.sign(
+      { id: usuario.id, email: usuario.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    console.log(`✅ Login bem-sucedido: ${usuario.email} (ID: ${usuario.id})`);
+
+    res.json({
+      status: "sucesso",
+      token,
+      usuario: {
+        id: usuario.id,
+        nome: usuario.nome,
+        email: usuario.email
+      }
+    });
 
   } catch (error) {
-    console.error("❌ Erro no Banco de Dados:", error.message);
-    return res.status(500).json({ erro: "Erro interno ao conectar ao banco de dados." });
+    console.error("❌ Erro no login:", error.message);
+    res.status(500).json({ erro: "Erro interno ao fazer login" });
   }
 });
 
@@ -6615,71 +6619,87 @@ app.put("/api/leads/:id", autenticarToken, async (req, res) => {
 /**
  * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD
  */
+/**
+ * REGISTRAR INTERAÇÃO COM LEAD
+ */
 app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   const { id } = req.params;
-  const { tipo, data, hora, descricao } = req.body;
-
-  console.log("🔥 ROTA CORRETA CHAMADA");
-  console.log("ID USUARIO:", req.usuario?.id);
-
+  const { tipo, descricao, data, hora } = req.body;
+  
   if (!tipo) {
     return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
   }
-
-  if (!req.usuario || !req.usuario.id) {
-    return res.status(401).json({ erro: "Usuário não autenticado corretamente" });
+  
+  const criado_por = req.usuario?.id;
+  
+  if (!criado_por) {
+    return res.status(401).json({ erro: "Usuário não identificado" });
   }
-
-  const criado_por = req.usuario.id;
-
+  
   const client = await pool.connect();
-
+  
   try {
     await client.query('BEGIN');
-
-    // 🔍 valida se usuário existe
+    
+    // VALIDAÇÃO: Verificar se o usuário existe no banco
     const userCheck = await client.query(
       "SELECT id FROM usuarios WHERE id = $1",
       [criado_por]
     );
-
+    
     if (userCheck.rows.length === 0) {
-      throw new Error(`Usuário ${criado_por} NÃO existe no banco`);
+      throw new Error(`Usuário ID ${criado_por} não existe no banco de dados`);
     }
-
-    const interacaoResult = await client.query(`
-      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao, criado_por)
-      VALUES ($1, $2, $3, $4, $5, $6)
+    
+    // VALIDAÇÃO: Verificar se o lead existe
+    const leadCheck = await client.query(
+      "SELECT id FROM leads WHERE id = $1",
+      [id]
+    );
+    
+    if (leadCheck.rows.length === 0) {
+      throw new Error(`Lead ID ${id} não existe`);
+    }
+    
+    // Inserir interação
+    const query = `
+      INSERT INTO interacoes_leads (lead_id, tipo, descricao, data, hora, criado_por, criado_em)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
       RETURNING *
-    `, [
-      id,
-      tipo,
-      data || new Date().toISOString().split('T')[0],
-      hora || null,
-      descricao || null,
+    `;
+    
+    const values = [
+      id, 
+      tipo, 
+      descricao || null, 
+      data || new Date().toISOString().split('T')[0], 
+      hora || new Date().toLocaleTimeString('pt-BR', { hour12: false }), 
       criado_por
-    ]);
-
-    await client.query(`
-      UPDATE leads SET 
-        ultimo_contato = COALESCE($1, ultimo_contato),
+    ];
+    
+    const result = await client.query(query, values);
+    
+    // Atualizar último contato do lead
+    await client.query(
+      `UPDATE leads SET 
+        ultimo_contato = $1,
         data_atualizacao = CURRENT_TIMESTAMP
-      WHERE id = $2
-    `, [data || new Date().toISOString().split('T')[0], id]);
-
+      WHERE id = $2`,
+      [data || new Date().toISOString().split('T')[0], id]
+    );
+    
     await client.query('COMMIT');
-
-    res.status(201).json(interacaoResult.rows[0]);
-
+    
+    console.log(`✅ Interação registrada - Lead: ${id}, Usuário: ${criado_por}`);
+    res.status(201).json(result.rows[0]);
+    
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("❌ Erro ao registrar interação:", error.message);
-
     res.status(500).json({ 
-      erro: "Erro ao registrar interação",
-      detalhes: error.message
+      erro: "Erro ao registrar interação", 
+      detalhes: error.message 
     });
-
   } finally {
     client.release();
   }
