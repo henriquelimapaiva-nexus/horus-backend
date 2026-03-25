@@ -6618,39 +6618,68 @@ app.put("/api/leads/:id", autenticarToken, async (req, res) => {
 app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const { tipo, data, hora, descricao } = req.body;
-  
+
+  console.log("🔥 ROTA CORRETA CHAMADA");
+  console.log("ID USUARIO:", req.usuario?.id);
+
   if (!tipo) {
     return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
   }
-  
+
+  if (!req.usuario || !req.usuario.id) {
+    return res.status(401).json({ erro: "Usuário não autenticado corretamente" });
+  }
+
+  const criado_por = req.usuario.id;
+
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
-    
-    // Registrar interação
+
+    // 🔍 valida se usuário existe
+    const userCheck = await client.query(
+      "SELECT id FROM usuarios WHERE id = $1",
+      [criado_por]
+    );
+
+    if (userCheck.rows.length === 0) {
+      throw new Error(`Usuário ${criado_por} NÃO existe no banco`);
+    }
+
     const interacaoResult = await client.query(`
       INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao, criado_por)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *
-    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null, req.usuario.id]);
-    
-    // Atualizar último contato do lead
+    `, [
+      id,
+      tipo,
+      data || new Date().toISOString().split('T')[0],
+      hora || null,
+      descricao || null,
+      criado_por
+    ]);
+
     await client.query(`
       UPDATE leads SET 
         ultimo_contato = COALESCE($1, ultimo_contato),
         data_atualizacao = CURRENT_TIMESTAMP
       WHERE id = $2
     `, [data || new Date().toISOString().split('T')[0], id]);
-    
+
     await client.query('COMMIT');
-    
+
     res.status(201).json(interacaoResult.rows[0]);
-    
+
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("❌ Erro ao registrar interação:", error.message);
-    res.status(500).json({ erro: "Erro ao registrar interação" });
+
+    res.status(500).json({ 
+      erro: "Erro ao registrar interação",
+      detalhes: error.message
+    });
+
   } finally {
     client.release();
   }
@@ -7166,47 +7195,6 @@ app.put("/api/leads/:id", autenticarToken, async (req, res) => {
 });
 
 /**
- * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD
- */
-app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
-  const { id } = req.params;
-  const { tipo, data, hora, descricao } = req.body;
-  
-  if (!tipo) {
-    return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
-  }
-  
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
-    
-    await client.query(`
-      INSERT INTO interacoes_leads (lead_id, tipo, data, hora, descricao)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, tipo, data || new Date().toISOString().split('T')[0], hora || null, descricao || null]);
-    
-    await client.query(`
-      UPDATE leads SET 
-        ultimo_contato = COALESCE($1, ultimo_contato),
-        data_atualizacao = CURRENT_TIMESTAMP
-      WHERE id = $2
-    `, [data || new Date().toISOString().split('T')[0], id]);
-    
-    await client.query('COMMIT');
-    
-    res.status(201).json({ mensagem: "Interação registrada com sucesso" });
-    
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error("❌ Erro ao registrar interação:", error.message);
-    res.status(500).json({ erro: "Erro ao registrar interação" });
-  } finally {
-    client.release();
-  }
-});
-
-/**
  * 6️⃣ DELETAR LEAD
  */
 app.delete("/api/leads/:id", autenticarToken, async (req, res) => {
@@ -7451,87 +7439,6 @@ app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
   } catch (error) {
     console.error("❌ Erro ao atualizar item:", error.message);
     res.status(500).json({ erro: "Erro ao atualizar item" });
-  }
-});
-
-/** 
- * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD 
- */
-
-app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
-
-  console.log("🔥 ROTA INTERACOES FOI CHAMADA");
-
-  // 🚨 TESTE DE DEPLOY (NÃO REMOVE NADA, só interrompe aqui)
-  return res.status(200).json({ teste: "CHEGUEI AQUI" });
-
-  const { id } = req.params;
-  const { tipo, descricao, data, hora } = req.body;
-
-  console.log("ID USUARIO:", req.usuario?.id);
-
-  if (!tipo) {
-    return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
-  }
-
-  if (!req.usuario || !req.usuario.id) {
-    return res.status(401).json({ erro: "Usuário não autenticado corretamente" });
-  }
-
-  const criado_por = req.usuario.id;
-
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const userCheck = await client.query(
-      "SELECT id FROM usuarios WHERE id = $1",
-      [criado_por]
-    );
-
-    if (userCheck.rows.length === 0) {
-      throw new Error("Usuário não existe no banco");
-    }
-
-    const query = `
-      INSERT INTO interacoes_leads (lead_id, tipo, descricao, data, hora, criado_por, criado_em)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-      RETURNING *
-    `;
-
-    const values = [
-      id,
-      tipo,
-      descricao || null,
-      data || new Date().toISOString().split('T')[0],
-      hora || new Date().toLocaleTimeString('pt-BR', { hour12: false }),
-      criado_por
-    ];
-
-    const result = await client.query(query, values);
-
-    await client.query(
-      `UPDATE leads SET 
-        ultimo_contato = $1,
-        data_atualizacao = CURRENT_TIMESTAMP
-      WHERE id = $2`,
-      [data || new Date().toISOString().split('T')[0], id]
-    );
-
-    await client.query('COMMIT');
-
-    res.status(201).json(result.rows[0]);
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error("❌ Erro ao registrar interação no Hórus:", error.message);
-    res.status(500).json({
-      erro: "Erro ao registrar interação",
-      detalhes: error.message
-    });
-  } finally {
-    client.release();
   }
 });
 
