@@ -111,17 +111,16 @@ function autenticarToken(req, res, next) {
       return res.status(403).json({ erro: "Token inválido ou expirado" });
     }
 
-    // Garantir que o ID existe
     if (!decoded.id) {
       return res.status(403).json({ erro: "Token não contém ID de usuário" });
     }
 
     req.usuario = {
       id: decoded.id,
-      email: decoded.email
+      email: decoded.email,
+      tipo: decoded.tipo
     };
-    
-    console.log(`🔑 Token válido - Usuário ID: ${req.usuario.id}`);
+
     next();
   });
 }
