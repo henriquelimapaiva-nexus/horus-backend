@@ -6988,23 +6988,49 @@ app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
 // ========================================
 
 /**
- * 1️⃣ LISTAR PROJETOS POR EMPRESA
+ * 1️⃣ LISTAR TODOS OS LEADS
+ * Filtros por status e data
  */
-app.get("/api/checklist/projetos/:empresaId", autenticarToken, async (req, res) => {
-  const { empresaId } = req.params;
-
+app.get("/api/leads", autenticarToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT * FROM projetos_checklist 
-       WHERE empresa_id = $1 
-       ORDER BY created_at DESC`,
-      [empresaId]
-    );
-
-    res.status(200).json(result.rows);
+    const { status, data_inicio, data_fim } = req.query;
+    
+    let query = `
+      SELECT l.*,
+        (SELECT COUNT(*) FROM interacoes_leads WHERE lead_id = l.id) as total_interacoes
+      FROM leads l
+      WHERE 1=1
+    `;
+    
+    const values = [];
+    let paramIndex = 1;
+    
+    if (status) {
+      query += ` AND l.status = $${paramIndex}`;
+      values.push(status);
+      paramIndex++;
+    }
+    
+    if (data_inicio) {
+      query += ` AND l.data_criacao >= $${paramIndex}`;
+      values.push(data_inicio);
+      paramIndex++;
+    }
+    
+    if (data_fim) {
+      query += ` AND l.data_criacao <= $${paramIndex}`;
+      values.push(data_fim);
+      paramIndex++;
+    }
+    
+    query += ` ORDER BY l.probabilidade_fechamento DESC, l.ultimo_contato DESC NULLS LAST, l.data_criacao DESC`;
+    
+    const result = await pool.query(query, values);
+    res.json(result.rows);
+    
   } catch (error) {
-    console.error("❌ Erro ao listar projetos:", error.message);
-    res.status(200).json([]);
+    console.error("❌ Erro ao buscar leads:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar leads" });
   }
 });
 
@@ -7226,28 +7252,42 @@ app.put("/api/checklist/fase/:faseId", autenticarToken, async (req, res) => {
 });
 
 /**
- * 7️⃣ DELETAR ITEM
+ * 7️⃣ DASHBOARD DE LEADS (MÉTRICAS)
  */
-app.delete("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
-  const { itemId } = req.params;
-
+app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      "DELETE FROM itens_checklist WHERE id = $1 RETURNING descricao",
-      [itemId]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ erro: "Item não encontrado" });
-    }
-
-    res.status(200).json({
-      mensagem: `Item "${result.rows[0].descricao}" removido com sucesso!`
+    const metrics = await pool.query(`
+      SELECT 
+        COUNT(*) as total_leads,
+        COUNT(*) FILTER (WHERE status = 'prospecção') as em_prospeccao,
+        COUNT(*) FILTER (WHERE status = 'contato_inicial') as contato_inicial,
+        COUNT(*) FILTER (WHERE status = 'proposta_enviada') as proposta_enviada,
+        COUNT(*) FILTER (WHERE status = 'negociação') as negociacao,
+        COUNT(*) FILTER (WHERE status = 'fechado') as fechados,
+        COUNT(*) FILTER (WHERE status = 'perdido') as perdidos,
+        COALESCE(SUM(potencial_faturamento) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_total,
+        COALESCE(SUM(potencial_faturamento * probabilidade_fechamento / 100) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_ponderado
+      FROM leads
+    `);
+    
+    // Leads com próximos contatos nos próximos 7 dias
+    const proximosContatos = await pool.query(`
+      SELECT id, nome, proximo_contato, contato_nome, contato_telefone
+      FROM leads
+      WHERE proximo_contato BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+      AND status NOT IN ('fechado', 'perdido')
+      ORDER BY proximo_contato ASC
+      LIMIT 10
+    `);
+    
+    res.json({
+      ...metrics.rows[0],
+      proximos_contatos: proximosContatos.rows
     });
-
+    
   } catch (error) {
-    console.error("❌ Erro ao deletar item:", error.message);
-    res.status(500).json({ erro: "Erro ao deletar item" });
+    console.error("❌ Erro ao buscar métricas de leads:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar métricas" });
   }
 });
 
