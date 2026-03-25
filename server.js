@@ -7454,9 +7454,15 @@ app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
   }
 });
 
+/** 
+ * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD 
+ */
+
 app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const { tipo, descricao, data, hora } = req.body;
+
+  console.log("ID USUARIO:", req.usuario?.id); // 👈 AQUI
 
   if (!tipo) {
     return res.status(400).json({ erro: "Tipo de interação é obrigatório" });
