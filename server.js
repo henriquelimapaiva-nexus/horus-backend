@@ -875,6 +875,29 @@ app.put("/api/cycle-measurements/:id", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * ROTA: EXCLUIR MEDIÇÃO DE CICLO
+ */
+app.delete("/api/cycle-measurements/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const result = await pool.query(
+      "DELETE FROM ciclo_medicao WHERE id = $1 RETURNING id",
+      [id]
+    );
+    
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Medição não encontrada" });
+    }
+    
+    res.json({ mensagem: "Medição excluída com sucesso" });
+  } catch (error) {
+    console.error("❌ Erro ao excluir medição:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir medição" });
+  }
+});
+
 // ========================================
 // 👷 MÓDULO: GESTÃO DE CARGOS E CUSTOS
 // ========================================
