@@ -768,10 +768,15 @@ app.post("/api/cycle-measurements", autenticarToken, async (req, res) => {
   }
 
   try {
+    // Gerar hora local do Brasil (UTC-3)
+    const agora = new Date();
+    const dataLocal = agora.toISOString().split('T')[0]; // YYYY-MM-DD
+    const horaLocal = agora.toLocaleTimeString('pt-BR', { hour12: false }); // HH:MM:SS
+    
     const query = `
       INSERT INTO ciclo_medicao 
-      (posto_id, operador_id, atividade, tempo_ciclo_segundos, metodo, observacao, data_medicao)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      (posto_id, operador_id, atividade, tempo_ciclo_segundos, metodo, observacao, data_medicao, hora_medicao)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *;
     `;
 
@@ -781,12 +786,14 @@ app.post("/api/cycle-measurements", autenticarToken, async (req, res) => {
       atividade.trim(),
       parseFloat(tempo_ciclo_segundos),
       metodo || 'padrao',
-      observacao || null
+      observacao || null,
+      dataLocal,
+      horaLocal
     ];
 
     const result = await pool.query(query, values);
     
-    console.log(`⏱️ Medição registrada: Posto ${posto_id} | ${atividade} | ${tempo_ciclo_segundos}s`);
+    console.log(`⏱️ Medição registrada: Posto ${posto_id} | ${atividade} | ${tempo_ciclo_segundos}s | ${dataLocal} ${horaLocal}`);
     
     res.status(201).json(result.rows[0]);
 
