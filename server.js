@@ -7477,6 +7477,99 @@ app.delete("/api/checklist/projeto/:projetoId", autenticarToken, async (req, res
 });
 
 // ========================================
+// 📋 MÓDULO: ELEMENTOS DE TRABALHO (CRONOANÁLISE DETALHADA)
+// ========================================
+
+// Listar elementos por posto
+app.get("/api/elementos/:postoId", autenticarToken, async (req, res) => {
+  try {
+    const { postoId } = req.params;
+    const result = await pool.query(
+      "SELECT * FROM elementos_trabalho WHERE posto_id = $1 ORDER BY ordem ASC",
+      [postoId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro ao buscar elementos:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar elementos" });
+  }
+});
+
+// Criar elemento
+app.post("/api/elementos", autenticarToken, async (req, res) => {
+  const { posto_id, nome, descricao, tempo_padrao_segundos, ordem, tipo } = req.body;
+  
+  if (!posto_id || !nome) {
+    return res.status(400).json({ erro: "Posto e nome são obrigatórios" });
+  }
+  
+  try {
+    const result = await pool.query(
+      `INSERT INTO elementos_trabalho 
+       (posto_id, nome, descricao, tempo_padrao_segundos, ordem, tipo)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [posto_id, nome, descricao || null, tempo_padrao_segundos || 0, ordem || 1, tipo || 'manual']
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro ao criar elemento:", error.message);
+    res.status(500).json({ erro: "Erro ao criar elemento" });
+  }
+});
+
+// Atualizar elemento
+app.put("/api/elementos/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { nome, descricao, tempo_padrao_segundos, ordem, tipo } = req.body;
+  
+  try {
+    const result = await pool.query(
+      `UPDATE elementos_trabalho SET
+        nome = COALESCE($1, nome),
+        descricao = COALESCE($2, descricao),
+        tempo_padrao_segundos = COALESCE($3, tempo_padrao_segundos),
+        ordem = COALESCE($4, ordem),
+        tipo = COALESCE($5, tipo),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $6
+      RETURNING *`,
+      [nome, descricao, tempo_padrao_segundos, ordem, tipo, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Elemento não encontrado" });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro ao atualizar elemento:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar elemento" });
+  }
+});
+
+// Deletar elemento
+app.delete("/api/elementos/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const result = await pool.query(
+      "DELETE FROM elementos_trabalho WHERE id = $1 RETURNING nome",
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Elemento não encontrado" });
+    }
+    
+    res.json({ mensagem: `Elemento "${result.rows[0].nome}" removido` });
+  } catch (error) {
+    console.error("❌ Erro ao deletar elemento:", error.message);
+    res.status(500).json({ erro: "Erro ao deletar elemento" });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
