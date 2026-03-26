@@ -745,31 +745,48 @@ app.delete("/api/work-stations/:id", autenticarToken, async (req, res) => {
  * Coleta o tempo de execução de uma tarefa em um posto específico.
  */
 app.post("/api/cycle-measurements", autenticarToken, async (req, res) => {
-  const { posto_id, tempo_ciclo_segundos } = req.body;
+  const { 
+    posto_id, 
+    operador_id,
+    atividade,      // 👈 atividade executada
+    tempo_ciclo_segundos, 
+    metodo,         // 👈 método (padrao, melhorado, fora_padrao)
+    observacao      // 👈 observações livres
+  } = req.body;
 
-  // Validação rigorosa: Não permitimos medições zeradas ou negativas
+  // Validação rigorosa
   if (!posto_id || !tempo_ciclo_segundos || parseFloat(tempo_ciclo_segundos) <= 0) {
     return res.status(400).json({ 
       erro: "Dados inválidos. O posto_id é obrigatório e o tempo deve ser maior que zero." 
     });
   }
 
+  if (!atividade) {
+    return res.status(400).json({ 
+      erro: "Descreva a atividade executada." 
+    });
+  }
+
   try {
     const query = `
-      INSERT INTO ciclo_medicao (posto_id, tempo_ciclo_segundos, data_medicao)
-      VALUES ($1, $2, NOW())
+      INSERT INTO ciclo_medicao 
+      (posto_id, operador_id, atividade, tempo_ciclo_segundos, metodo, observacao, data_medicao)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
       RETURNING *;
     `;
 
     const values = [
-      posto_id, 
-      parseFloat(tempo_ciclo_segundos)
+      posto_id,
+      operador_id || null,
+      atividade.trim(),
+      parseFloat(tempo_ciclo_segundos),
+      metodo || 'padrao',
+      observacao || null
     ];
 
     const result = await pool.query(query, values);
     
-    // Log de engenharia: monitoramento de latência de inserção
-    console.log(`⏱️ Medição registrada: Posto ${posto_id} | ${tempo_ciclo_segundos}s`);
+    console.log(`⏱️ Medição registrada: Posto ${posto_id} | ${atividade} | ${tempo_ciclo_segundos}s`);
     
     res.status(201).json(result.rows[0]);
 
@@ -781,6 +798,41 @@ app.post("/api/cycle-measurements", autenticarToken, async (req, res) => {
     }
 
     res.status(500).json({ erro: "Falha técnica ao salvar medição de ciclo" });
+  }
+});
+
+/**
+ * ROTA: BUSCAR MEDIÇÕES DE CICLO
+ * Retorna todas as medições de um posto
+ */
+app.get("/api/cycle-measurements", autenticarToken, async (req, res) => {
+  const { posto_id } = req.query;
+  
+  if (!posto_id) {
+    return res.status(400).json({ erro: "posto_id é obrigatório" });
+  }
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id, 
+        posto_id,
+        operador_id,
+        atividade,
+        tempo_ciclo_segundos,
+        metodo,
+        observacao,
+        data_medicao,
+        hora_medicao
+      FROM ciclo_medicao 
+      WHERE posto_id = $1 
+      ORDER BY data_medicao DESC, hora_medicao DESC
+    `, [posto_id]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro ao buscar medições:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar medições" });
   }
 });
 
