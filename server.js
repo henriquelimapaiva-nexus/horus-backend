@@ -843,6 +843,38 @@ app.get("/api/cycle-measurements", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * ROTA: ATUALIZAR MEDIÇÃO DE CICLO
+ */
+app.put("/api/cycle-measurements/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { operador_id, atividade, tempo_ciclo_segundos, metodo, observacao } = req.body;
+  
+  try {
+    const result = await pool.query(`
+      UPDATE ciclo_medicao SET
+        operador_id = COALESCE($1, operador_id),
+        atividade = COALESCE($2, atividade),
+        tempo_ciclo_segundos = COALESCE($3, tempo_ciclo_segundos),
+        metodo = COALESCE($4, metodo),
+        observacao = COALESCE($5, observacao),
+        data_medicao = data_medicao,
+        hora_medicao = hora_medicao
+      WHERE id = $6
+      RETURNING *
+    `, [operador_id, atividade, tempo_ciclo_segundos, metodo, observacao, id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ erro: "Medição não encontrada" });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro ao atualizar medição:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar medição" });
+  }
+});
+
 // ========================================
 // 👷 MÓDULO: GESTÃO DE CARGOS E CUSTOS
 // ========================================
