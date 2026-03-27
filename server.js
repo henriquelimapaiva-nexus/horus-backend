@@ -5309,6 +5309,68 @@ app.get("/api/manutencao/registros/linha/:linhaId", autenticarToken, async (req,
   }
 });
 
+/**
+ * ROTA: ATUALIZAR REGISTRO DE MANUTENÇÃO
+ */
+app.put("/api/manutencao/registros/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { posto_id, tipo, causa, tempo_parada_min, tempo_reparo_min, descricao, peca_substituida, turno, data } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE manutencao_registros SET
+        posto_id = COALESCE($1, posto_id),
+        tipo = COALESCE($2, tipo),
+        causa = COALESCE($3, causa),
+        tempo_parada_min = COALESCE($4, tempo_parada_min),
+        tempo_reparo_min = COALESCE($5, tempo_reparo_min),
+        descricao = COALESCE($6, descricao),
+        peca_substituida = COALESCE($7, peca_substituida),
+        turno = COALESCE($8, turno),
+        data = COALESCE($9, data),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $10
+      RETURNING *`,
+      [posto_id, tipo, causa, tempo_parada_min, tempo_reparo_min, descricao, peca_substituida, turno, data, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Registro de manutenção não encontrado" });
+    }
+
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro PUT /manutencao/registros/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar registro de manutenção" });
+  }
+});
+
+/**
+ * ROTA: EXCLUIR REGISTRO DE MANUTENÇÃO
+ */
+app.delete("/api/manutencao/registros/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM manutencao_registros WHERE id = $1 RETURNING id",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Registro de manutenção não encontrado" });
+    }
+
+    res.status(200).json({ 
+      mensagem: "Registro de manutenção excluído com sucesso",
+      id: result.rows[0].id
+    });
+  } catch (error) {
+    console.error("❌ Erro DELETE /manutencao/registros/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir registro de manutenção" });
+  }
+});
+
 // ========================================
 // 👥 RH - TREINAMENTO E HABILIDADES
 // ========================================
