@@ -5050,6 +5050,52 @@ app.get("/api/oee/history/:linhaId", autenticarToken, async (req, res) => {
 });
 
 /**
+ * ROTA: HISTÓRICO DA LINHA (para gráficos)
+ */
+app.get("/api/history/line/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  
+  try {
+    const result = await pool.query(`
+      SELECT data, oee, disponibilidade, performance, qualidade
+      FROM producao_oee
+      WHERE linha_id = $1
+      ORDER BY data ASC, turno ASC
+    `, [linhaId]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error("❌ Erro GET /history/line:", error.message);
+    res.status(500).json({ erro: "Erro ao carregar histórico da linha" });
+  }
+});
+
+/**
+ * ROTA: EFICIÊNCIA GLOBAL DA LINHA
+ */
+app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COALESCE(AVG(oee), 0) as oee_medio,
+        COALESCE(AVG(disponibilidade), 0) as disponibilidade_media,
+        COALESCE(AVG(performance), 0) as performance_media,
+        COALESCE(AVG(qualidade), 0) as qualidade_media,
+        COUNT(*) as total_registros
+      FROM producao_oee
+      WHERE linha_id = $1
+    `, [linhaId]);
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro GET /global-efficiency:", error.message);
+    res.status(500).json({ erro: "Erro ao carregar eficiência global" });
+  }
+});
+
+/**
  * ROTA: EXCLUIR REGISTRO DE PRODUÇÃO (OEE)
  */
 app.delete("/api/producao/:id", autenticarToken, async (req, res) => {
