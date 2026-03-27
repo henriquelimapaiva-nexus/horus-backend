@@ -5247,6 +5247,127 @@ app.get("/api/qualidade/medicoes/linha/:linhaId", autenticarToken, async (req, r
   }
 });
 
+/**
+ * ROTA: ATUALIZAR DEFEITO
+ */
+app.put("/api/qualidade/defeitos/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { posto_id, produto_id, tipo_defeito, quantidade, turno, data, descricao, acao_imediata } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE defeitos_qualidade SET
+        posto_id = COALESCE($1, posto_id),
+        produto_id = COALESCE($2, produto_id),
+        tipo_defeito = COALESCE($3, tipo_defeito),
+        quantidade = COALESCE($4, quantidade),
+        turno = COALESCE($5, turno),
+        data = COALESCE($6, data),
+        descricao = COALESCE($7, descricao),
+        acao_imediata = COALESCE($8, acao_imediata)
+      WHERE id = $9
+      RETURNING *`,
+      [posto_id, produto_id, tipo_defeito, quantidade, turno, data, descricao, acao_imediata, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Defeito não encontrado" });
+    }
+
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro PUT /qualidade/defeitos/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar defeito" });
+  }
+});
+
+/**
+ * ROTA: EXCLUIR DEFEITO
+ */
+app.delete("/api/qualidade/defeitos/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM defeitos_qualidade WHERE id = $1 RETURNING id",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Defeito não encontrado" });
+    }
+
+    res.status(200).json({ 
+      mensagem: "Defeito excluído com sucesso",
+      id: result.rows[0].id
+    });
+  } catch (error) {
+    console.error("❌ Erro DELETE /qualidade/defeitos/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir defeito" });
+  }
+});
+
+/**
+ * ROTA: ATUALIZAR MEDIÇÃO DIMENSIONAL
+ */
+app.put("/api/qualidade/medicoes/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { posto_id, produto_id, caracteristica, valor_medido, limite_inferior, limite_superior, unidade, turno, data } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE medicoes_qualidade SET
+        posto_id = COALESCE($1, posto_id),
+        produto_id = COALESCE($2, produto_id),
+        caracteristica = COALESCE($3, caracteristica),
+        valor_medido = COALESCE($4, valor_medido),
+        limite_inferior = COALESCE($5, limite_inferior),
+        limite_superior = COALESCE($6, limite_superior),
+        unidade = COALESCE($7, unidade),
+        turno = COALESCE($8, turno),
+        data = COALESCE($9, data)
+      WHERE id = $10
+      RETURNING *`,
+      [posto_id, produto_id, caracteristica, valor_medido, limite_inferior, limite_superior, unidade, turno, data, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Medição não encontrada" });
+    }
+
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("❌ Erro PUT /qualidade/medicoes/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao atualizar medição" });
+  }
+});
+
+/**
+ * ROTA: EXCLUIR MEDIÇÃO DIMENSIONAL
+ */
+app.delete("/api/qualidade/medicoes/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM medicoes_qualidade WHERE id = $1 RETURNING id",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Medição não encontrada" });
+    }
+
+    res.status(200).json({ 
+      mensagem: "Medição excluída com sucesso",
+      id: result.rows[0].id
+    });
+  } catch (error) {
+    console.error("❌ Erro DELETE /qualidade/medicoes/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir medição" });
+  }
+});
+
 // ========================================
 // 🔧 TPM - MANUTENÇÃO
 // ========================================
