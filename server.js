@@ -5049,6 +5049,34 @@ app.get("/api/oee/history/:linhaId", autenticarToken, async (req, res) => {
   }
 });
 
+/**
+ * ROTA: EXCLUIR REGISTRO DE PRODUÇÃO (OEE)
+ */
+app.delete("/api/producao/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM producao_oee WHERE id = $1 RETURNING id, data, turno, produto_id",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Registro de produção não encontrado." });
+    }
+
+    console.log(`🗑️ Produção excluída: ID ${id}`);
+    res.status(200).json({ 
+      mensagem: "Registro de produção excluído com sucesso.",
+      id: result.rows[0].id
+    });
+
+  } catch (error) {
+    console.error("❌ Erro DELETE /producao/:id:", error.message);
+    res.status(500).json({ erro: "Erro ao excluir registro de produção." });
+  }
+});
+
 // ========================================
 // 📊 SPC - QUALIDADE (DEFEITOS E MEDIÇÕES)
 // ========================================
