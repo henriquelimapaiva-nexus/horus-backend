@@ -1229,7 +1229,7 @@ app.get("/api/line-intelligence/:linhaId", autenticarToken, async (req, res) => 
         ROUND(((c.salario_base * (1 + (c.encargos_percentual / 100))) / 220)::numeric, 2) AS custo_hora_estimado
       FROM linha_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
-      LEFT JOIN cargo c ON c.id = pt.cargo_id
+      LEFT JOIN cargos c ON c.id = pt.cargo_id
       WHERE lp.id = $1
       ORDER BY pt.ordem_fluxo ASC;
     `;
@@ -1367,10 +1367,10 @@ app.get("/api/simulation/:linhaId", autenticarToken, async (req, res) => {
         COALESCE(pl.microparadas_minutos, 0) as microparadas,
         COALESCE(pl.retrabalho_pecas, 0) as retrabalho,
         COALESCE(pl.refugo_pecas, 0) as refugo
-      FROM linha_produto lp_prod
-      JOIN produto p ON p.id = lp_prod.produto_id
-      JOIN linha_producao l ON l.id = lp_prod.linha_id
-      JOIN empresa e ON e.id = l.empresa_id
+      FROM linha_produtos lp_prod
+      JOIN produtos p ON p.id = lp_prod.produto_id
+      JOIN linhas_producao l ON l.id = lp_prod.linha_id
+      JOIN empresas e ON e.id = l.empresa_id
       LEFT JOIN posto_trabalho pt ON pt.linha_id = l.id
       LEFT JOIN perdas_linha pl ON pl.linha_produto_id = lp_prod.id
       WHERE l.id = $1
@@ -1638,7 +1638,7 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
       SELECT 
         lp.takt_time_segundos,
         lp.meta_diaria,
-        pt.tempo_cycle_segundos, -- Verifique se o nome da coluna está correto
+        pt.tempo_ciclo_segundos, -- Verifique se o nome da coluna está correto
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
       FROM linha_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
@@ -2866,7 +2866,7 @@ app.get("/api/finance/line/:linhaId", autenticarToken, async (req, res) => {
         COALESCE(c.salario_base, 0) as salario,
         COALESCE(c.encargos_percentual, 70) as encargos
       FROM posto_trabalho pt
-      LEFT JOIN cargo c ON c.id = pt.cargo_id
+      LEFT JOIN cargos c ON c.id = pt.cargo_id
       WHERE pt.linha_id = $1
     `, [linhaId]);
 
@@ -2928,7 +2928,7 @@ app.get("/api/finance/corporate/:empresaId", autenticarToken, async (req, res) =
         FROM linha_producao l
         JOIN empresa e ON e.id = l.empresa_id
         LEFT JOIN posto_trabalho pt ON pt.linha_id = l.id
-        LEFT JOIN cargo c ON c.id = pt.cargo_id
+        LEFT JOIN cargos c ON c.id = pt.cargo_id
         WHERE l.empresa_id = $1
       ),
       consolidado_linhas AS (
@@ -3398,7 +3398,7 @@ app.get("/api/insights/factory-health/:empresaId", autenticarToken, async (req, 
          WHERE lp.linha_id = l.id) as refugo_total
       FROM linha_producao l
       JOIN posto_trabalho pt ON pt.linha_id = l.id
-      LEFT JOIN cargo c ON c.id = pt.cargo_id
+      LEFT JOIN cargos c ON c.id = pt.cargo_id
       WHERE l.empresa_id = $1
     `, [empresaId]);
 
