@@ -1227,7 +1227,7 @@ app.get("/api/line-intelligence/:linhaId", autenticarToken, async (req, res) => 
         c.encargos_percentual,
         -- Cálculo de Custo Estimado por Hora (Salário + Encargos / 220h padrão)
         ROUND(((c.salario_base * (1 + (c.encargos_percentual / 100))) / 220)::numeric, 2) AS custo_hora_estimado
-      FROM linha_producao lp
+      FROM linhas_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
       LEFT JOIN cargos c ON c.id = pt.cargo_id
       WHERE lp.id = $1
@@ -1269,7 +1269,7 @@ app.get("/api/line-analysis/:linhaId", autenticarToken, async (req, res) => {
         pt.nome,
         pt.tempo_ciclo_segundos,
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
-      FROM linha_producao lp
+      FROM linhas_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
       WHERE lp.id = $1
       ORDER BY pt.ordem_fluxo ASC
@@ -1367,7 +1367,7 @@ app.get("/api/simulation/:linhaId", autenticarToken, async (req, res) => {
         COALESCE(pl.microparadas_minutos, 0) as microparadas,
         COALESCE(pl.retrabalho_pecas, 0) as retrabalho,
         COALESCE(pl.refugo_pecas, 0) as refugo
-      FROM linha_produtos lp_prod
+      FROM linha_produto lp_prod
       JOIN produtos p ON p.id = lp_prod.produto_id
       JOIN linhas_producao l ON l.id = lp_prod.linha_id
       JOIN empresas e ON e.id = l.empresa_id
@@ -1640,7 +1640,7 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
         lp.meta_diaria,
         pt.tempo_ciclo_segundos, -- Verifique se o nome da coluna está correto
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
-      FROM linha_producao lp
+      FROM linhas_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
       WHERE lp.id = $1
     `, [linhaId]);
@@ -2588,7 +2588,7 @@ app.get("/api/history/line/:linhaId", autenticarToken, async (req, res) => {
         -- Cálculo de OEE Mensal Baseado em Performance de Ciclo
         ROUND(LEAST(100, (lp.takt_time_segundos / NULLIF(m.avg_ciclo, 0)) * 100), 2) as oee_performance
       FROM metricas_mensais m
-      CROSS JOIN (SELECT takt_time_segundos FROM linha_producao WHERE id = $1) lp
+      CROSS JOIN (SELECT takt_time_segundos FROM linhas_producao WHERE id = $1) lp
       ORDER BY m.mes DESC
       LIMIT 6;
     `;
@@ -2846,7 +2846,7 @@ app.get("/api/finance/line/:linhaId", autenticarToken, async (req, res) => {
         l.id, l.nome, l.empresa_id,
         e.dias_produtivos_mes,
         e.horas_turno_diario -- Adicione esta coluna no seu setup para ser real
-      FROM linha_producao l
+      FROM linhas_producao l
       JOIN empresa e ON e.id = l.empresa_id
       WHERE l.id = $1
     `;
@@ -2925,7 +2925,7 @@ app.get("/api/finance/corporate/:empresaId", autenticarToken, async (req, res) =
           e.dias_produtivos_mes,
           e.horas_turno_diario,
           COALESCE(c.salario_base * (1 + (COALESCE(c.encargos_percentual, 70) / 100)), 0) as custo_posto_mensal
-        FROM linha_producao l
+        FROM linhas_producao l
         JOIN empresa e ON e.id = l.empresa_id
         LEFT JOIN posto_trabalho pt ON pt.linha_id = l.id
         LEFT JOIN cargos c ON c.id = pt.cargo_id
@@ -3030,7 +3030,7 @@ app.get("/api/allocations/station/:postoId", autenticarToken, async (req, res) =
         cg.salario_base
       FROM alocacao_colaborador a
       JOIN colaborador c ON c.id = a.colaborador_id
-      JOIN cargo cg ON cg.id = c.cargo_id
+      JOIN cargos cg ON cg.id = c.cargo_id
       WHERE a.posto_id = $1
       ${ativo === 'true' ? 'AND a.ativo = true' : ''}
       ORDER BY a.turno ASC, a.data_inicio DESC
@@ -3396,7 +3396,7 @@ app.get("/api/insights/factory-health/:empresaId", autenticarToken, async (req, 
         (SELECT SUM(refugo_pecas) FROM perdas_linha pl 
          JOIN linha_produto lp ON lp.id = pl.linha_produto_id 
          WHERE lp.linha_id = l.id) as refugo_total
-      FROM linha_producao l
+      FROM linhas_producao l
       JOIN posto_trabalho pt ON pt.linha_id = l.id
       LEFT JOIN cargos c ON c.id = pt.cargo_id
       WHERE l.empresa_id = $1
