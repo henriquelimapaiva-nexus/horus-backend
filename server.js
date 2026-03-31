@@ -384,14 +384,15 @@ app.delete("/api/lines/:id", autenticarToken, async (req, res) => {
 });
 
 /**
- * 4️⃣ EDITAR LINHA (PUT)
+ * 4️⃣ EDITAR LINHA (PUT) - CORRIGIDO ✅
  * Atualiza os dados básicos da linha e suas associações com produtos
+ * ✅ CORREÇÃO: Recalcula takt_time_segundos e meta_diaria quando produtos são alterados
  */
 app.put("/api/lines/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const { nome, produtos } = req.body;
   
-  // ✅ CORREÇÃO: Aceita horas em qualquer formato (frontend envia horas_produtivas_dia)
+  // Aceita horas em qualquer formato
   const horas = req.body.horas_disponiveis || req.body.horas_produtivas_dia || 16;
   const horasNumericas = parseFloat(horas) || 16;
   
@@ -400,7 +401,7 @@ app.put("/api/lines/:id", autenticarToken, async (req, res) => {
   try {
     await client.query('BEGIN');
     
-    // 1. Atualizar a linha - AGORA FUNCIONA COM QUALQUER NOME
+    // 1. Atualizar a linha (nome e horas)
     const result = await client.query(
       `UPDATE linhas_producao 
        SET nome = COALESCE($1, nome), 
@@ -414,22 +415,44 @@ app.put("/api/lines/:id", autenticarToken, async (req, res) => {
       return res.status(404).json({ erro: "Linha não encontrada" });
     }
     
-    // 2. Se veio produtos, atualizar associações
+    // 2. Se veio produtos, atualizar associações e recalcular takt/meta
     if (produtos && produtos.length > 0) {
       // Remover associações antigas
-      await client.query(
-        'DELETE FROM linha_produto WHERE linha_id = $1',
-        [id]
-      );
+      await client.query('DELETE FROM linha_produto WHERE linha_id = $1', [id]);
       
-      // Inserir novas associações
+      // 🔥 CALCULAR takt e meta da linha (média dos produtos)
+      let taktTotal = 0;
+      let metaTotal = 0;
+      
+      // Inserir novas associações e acumular totais
       for (const prod of produtos) {
+        const taktProd = parseFloat(prod.takt_time_segundos || prod.takt || 0);
+        const metaProd = parseInt(prod.meta_diaria || prod.meta || 0);
+        
+        taktTotal += taktProd;
+        metaTotal += metaProd;
+        
         await client.query(
           `INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
            VALUES ($1, $2, $3, $4)`,
-          [id, prod.produto_id || prod.id, prod.takt_time_segundos || prod.takt, prod.meta_diaria || prod.meta]
+          [id, prod.produto_id || prod.id, taktProd, metaProd]
         );
       }
+      
+      // 🔥 RECALCULAR e atualizar takt e meta da linha
+      const totalProdutos = produtos.length;
+      const novoTakt = Math.round(taktTotal / totalProdutos);
+      const novaMeta = Math.round(metaTotal / totalProdutos);
+      
+      await client.query(
+        `UPDATE linhas_producao 
+         SET takt_time_segundos = $1, 
+             meta_diaria = $2
+         WHERE id = $3`,
+        [novoTakt, novaMeta, id]
+      );
+      
+      console.log(`✅ Linha ID ${id} atualizada: takt=${novoTakt}s, meta=${novaMeta}pç/dia`);
     }
     
     await client.query('COMMIT');
@@ -470,15 +493,16 @@ app.put("/api/lines/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🏭 MÓDULO: LINHAS MASTER (MULTIDATA)
+// 🏭 MÓDULO: LINHAS MASTER (MULTIDATA) - CORRIGIDO ✅
 // ========================================
 
 /**
  * ROTA: CRIAR LINHA COM MÚLTIPLOS PRODUTOS
  * Permite definir Takts e Metas específicas para cada produto na mesma linha.
+ * ✅ CORREÇÃO: Agora calcula e salva takt_time_segundos e meta_diaria na tabela linhas_producao
  */
 app.post("/api/lines-master", autenticarToken, async (req, res) => {
-  const client = await pool.connect(); // Usamos 'client' direto para transações
+  const client = await pool.connect();
   
   try {
     const { 
@@ -495,24 +519,39 @@ app.post("/api/lines-master", autenticarToken, async (req, res) => {
       });
     }
 
-    await client.query('BEGIN'); // Início da operação atômica
+    await client.query('BEGIN');
 
-    // 2. Criar a Cabeça da Linha (Master)
+    // 🔥 CORREÇÃO: Calcular takt e meta da linha (média dos produtos)
+    let taktTotal = 0;
+    let metaTotal = 0;
+    
+    produtos.forEach(p => {
+      const taktProd = parseFloat(p.takt) || 0;
+      const metaProd = parseInt(p.meta) || 0;
+      taktTotal += taktProd;
+      metaTotal += metaProd;
+    });
+    
+    const taktLinha = Math.round(taktTotal / produtos.length);
+    const metaLinha = Math.round(metaTotal / produtos.length);
+
+    // 2. Criar a Cabeça da Linha (Master) - AGORA COM TAKT E META
     const linhaQuery = `
-      INSERT INTO linhas_producao (empresa_id, nome, horas_disponiveis)
-      VALUES ($1, $2, $3)
+      INSERT INTO linhas_producao (empresa_id, nome, horas_disponiveis, takt_time_segundos, meta_diaria)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING id;
     `;
     const linhaRes = await client.query(linhaQuery, [
       empresa_id, 
       nome.trim(), 
-      parseFloat(horas_produtivas) || 8.8
+      parseFloat(horas_produtivas) || 8.8,
+      taktLinha,   // ✅ NOVO: takt calculado
+      metaLinha    // ✅ NOVO: meta calculada
     ]);
     
     const linhaId = linhaRes.rows[0].id;
 
-    // 3. Vincular Produtos (Performance Relacional)
-    // Usamos Promise.all para otimizar as inserções dentro da transação
+    // 3. Vincular Produtos
     const insertPromessas = produtos.map(p => {
       const pQuery = `
         INSERT INTO linha_produto (linha_id, produto_id, takt_time_segundos, meta_diaria)
@@ -528,16 +567,19 @@ app.post("/api/lines-master", autenticarToken, async (req, res) => {
     });
 
     await Promise.all(insertPromessas);
-
-    await client.query('COMMIT'); // Consolida no banco
+    await client.query('COMMIT');
+    
+    console.log(`✅ Linha "${nome}" criada com takt=${taktLinha}s e meta=${metaLinha}pç/dia`);
     
     res.status(201).json({ 
       mensagem: "Linha Master e performances de produtos registradas.",
-      linha_id: linhaId 
+      linha_id: linhaId,
+      takt_calculado: taktLinha,
+      meta_calculada: metaLinha
     });
 
   } catch (error) {
-    await client.query('ROLLBACK'); // Desfaz tudo em caso de qualquer erro
+    await client.query('ROLLBACK');
     console.error("❌ Erro Crítico Master Route:", error.message);
     
     if (error.code === '23503') {
@@ -546,7 +588,7 @@ app.post("/api/lines-master", autenticarToken, async (req, res) => {
 
     res.status(500).json({ erro: "Falha ao processar o cadastro mestre da linha." });
   } finally {
-    client.release(); // Libera o client de volta para o pool (Obrigatório!)
+    client.release();
   }
 });
 
