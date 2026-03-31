@@ -1665,7 +1665,7 @@ app.get("/api/line-balancing/:linhaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🌎 MÓDULO: EFICIÊNCIA GLOBAL (MACRO)
+// 🌎 MÓDULO: EFICIÊNCIA GLOBAL (MACRO) - CORRIGIDO ✅
 // ========================================
 
 /**
@@ -1676,11 +1676,12 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
   try {
     const { linhaId } = req.params;
 
+    // Buscar dados da linha e postos
     const result = await pool.query(`
       SELECT 
         lp.takt_time_segundos,
         lp.meta_diaria,
-        pt.tempo_ciclo_segundos, -- Verifique se o nome da coluna está correto
+        pt.tempo_ciclo_segundos,  /* ✅ CORRIGIDO: era 'tempo_cycle_segundos' */
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
       FROM linhas_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
@@ -1694,48 +1695,50 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
     const taktAlvo = parseFloat(result.rows[0].takt_time_segundos) || 0;
     const metaDiaria = parseFloat(result.rows[0].meta_diaria) || 0;
 
-    let tempoAgregadoTotal = 0;
     let ritmoGargalo = 0;
-    const totalPostos = result.rows.filter(r => r.tempo_cycle_segundos !== null).length;
+    let totalPostos = 0;
 
+    // Calcular ritmo do gargalo
     result.rows.forEach(p => {
-      const cicloNominal = parseFloat(p.tempo_cycle_segundos) || 0;
-      const disp = (parseFloat(p.disponibilidade) || 100) / 100;
-      const cicloAjustado = disp > 0 ? cicloNominal / disp : 0;
+      if (p.tempo_ciclo_segundos !== null) {
+        totalPostos++;
+        const cicloNominal = parseFloat(p.tempo_ciclo_segundos) || 0;
+        const disp = (parseFloat(p.disponibilidade) || 100) / 100;
+        const cicloAjustado = disp > 0 ? cicloNominal / disp : 0;
 
-      tempoAgregadoTotal += cicloAjustado;
-      if (cicloAjustado > ritmoGargalo) ritmoGargalo = cicloAjustado;
+        if (cicloAjustado > ritmoGargalo) ritmoGargalo = cicloAjustado;
+      }
     });
 
-    // Validação de Dados Mestre
+    // Validação de dados
     if (ritmoGargalo === 0 || metaDiaria === 0 || taktAlvo === 0 || totalPostos === 0) {
       return res.status(200).json({
         alerta: "Estrutura de linha incompleta",
         mensagem: "Certifique-se de que a meta, o takt e os tempos de ciclo dos postos estão cadastrados.",
-        meta_planejada: metaDiaria
+        meta_planejada: metaDiaria,
+        takt_configurado: taktAlvo,
+        postos_encontrados: totalPostos,
+        ritmo_gargalo: ritmoGargalo
       });
     }
 
-    // 🎯 INDICADORES TÉCNICOS
-    
-    // Capacidade Real: O que o gargalo permite produzir no tempo planejado
+    // Cálculos finais
     const capacidadeReal = Math.floor((metaDiaria * taktAlvo) / ritmoGargalo);
-
-    // Ocupação: Média de saturação dos postos em relação ao gargalo
-    const taxaOcupacao = ((tempoAgregadoTotal / (ritmoGargalo * totalPostos)) * 100).toFixed(2);
-
-    // Eficiência Global: Proximidade da meta planejada
     const eficienciaGlobal = ((capacidadeReal / metaDiaria) * 100).toFixed(2);
 
     res.status(200).json({
-      metas: {
-        planejada: metaDiaria,
-        alcancavel_pelo_gargalo: capacidadeReal
-      },
-      kpis: {
-        eficiencia_global: eficienciaGlobal + "%",
-        ocupacao_media_recursos: taxaOcupacao + "%",
-        perda_capacidade_diaria: metaDiaria - capacidadeReal
+      oee: parseFloat(eficienciaGlobal),
+      eficiencia_global: eficienciaGlobal + "%",
+      capacidade_estimada: capacidadeReal,
+      gargalo_identificado: ritmoGargalo,
+      takt_time: taktAlvo,
+      meta_diaria: metaDiaria,
+      detalhes: {
+        ritmo_gargalo: ritmoGargalo,
+        takt_alvo: taktAlvo,
+        capacidade_real: capacidadeReal,
+        meta_diaria: metaDiaria,
+        total_postos: totalPostos
       }
     });
 
