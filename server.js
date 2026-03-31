@@ -2829,7 +2829,7 @@ app.get("/api/line-products/:linhaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 💰 MÓDULO: ECONOMETRIA INDUSTRIAL
+// 💰 MÓDULO: ECONOMETRIA INDUSTRIAL - CORRIGIDO ✅
 // ========================================
 
 /**
@@ -2841,13 +2841,14 @@ app.get("/api/finance/line/:linhaId", autenticarToken, async (req, res) => {
 
   try {
     // 1. Consolidação de Dados: Linha, Empresa e Calendário
+    // ✅ CORREÇÃO 1: 'empresas' (plural) em vez de 'empresa'
+    // ✅ CORREÇÃO 2: Removeu 'horas_turno_diario' que não existe
     const queryMaster = `
       SELECT 
         l.id, l.nome, l.empresa_id,
-        e.dias_produtivos_mes,
-        e.horas_turno_diario -- Adicione esta coluna no seu setup para ser real
+        COALESCE(e.dias_produtivos_mes, 22) as dias_produtivos_mes
       FROM linhas_producao l
-      JOIN empresa e ON e.id = l.empresa_id
+      JOIN empresas e ON e.id = l.empresa_id
       WHERE l.id = $1
     `;
     const linhaRes = await pool.query(queryMaster, [linhaId]);
@@ -2856,12 +2857,13 @@ app.get("/api/finance/line/:linhaId", autenticarToken, async (req, res) => {
 
     const linha = linhaRes.rows[0];
     const diasMes = linha.dias_produtivos_mes || 22;
-    const horasDia = linha.horas_turno_diario || 8;
+    const horasDia = 8; // ✅ FIXO: 8 horas por dia (padrão industrial)
 
     // 2. Cálculo de Mão de Obra Direta (MOD) com Join de Cargos
     const postosRes = await pool.query(`
       SELECT 
         pt.id, pt.nome as posto_nome,
+        pt.tempo_setup_minutos,
         c.nome as cargo_nome,
         COALESCE(c.salario_base, 0) as salario,
         COALESCE(c.encargos_percentual, 70) as encargos
@@ -2871,19 +2873,32 @@ app.get("/api/finance/line/:linhaId", autenticarToken, async (req, res) => {
     `, [linhaId]);
 
     let totalMensalMOD = 0;
+    const minutosDisponiveisMes = diasMes * horasDia * 60;
+    
     const detalhamentoPostos = postosRes.rows.map(p => {
-      const custoMensal = parseFloat(p.salario) * (1 + (parseFloat(p.encargos) / 100));
+      const salario = parseFloat(p.salario) || 0;
+      const encargos = parseFloat(p.encargos) || 70;
+      const custoMensal = salario * (1 + (encargos / 100));
       totalMensalMOD += custoMensal;
+      
+      // ✅ NOVO: Calcula custo de setup por dia
+      const custoPorMinuto = minutosDisponiveisMes > 0 ? totalMensalMOD / minutosDisponiveisMes : 0;
+      const tempoSetupMinutos = parseFloat(p.tempo_setup_minutos) || 0;
+      const custoSetupDia = tempoSetupMinutos * custoPorMinuto;
+      
       return {
         id: p.id,
         posto: p.posto_nome,
-        cargo: p.cargo_nome,
-        custo_mensal: Math.round(custoMensal * 100) / 100
+        cargo: p.cargo_nome || "❌ Não definido",
+        salario_base: salario,
+        encargos_percentual: encargos,
+        custo_mensal: Math.round(custoMensal * 100) / 100,
+        tempo_setup_minutos: tempoSetupMinutos,
+        custo_setup_dia: Math.round(custoSetupDia * 100) / 100
       };
     });
 
-    // 3. O "Pulo do Gato": Custo da Ineficiência
-    const minutosDisponiveisMes = diasMes * horasDia * 60;
+    // 3. Cálculo dos custos agregados
     const custoMinuto = minutosDisponiveisMes > 0 ? totalMensalMOD / minutosDisponiveisMes : 0;
 
     res.status(200).json({
