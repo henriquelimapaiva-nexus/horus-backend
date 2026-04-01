@@ -3084,7 +3084,7 @@ app.get("/api/allocations/station/:postoId", autenticarToken, async (req, res) =
   try {
     const query = `
       SELECT 
-        a.id, a.turno, a.data_inicio, a.ativo,
+        a.id, a.posto_id, a.turno, a.data_inicio, a.ativo,
         c.nome as colaborador,
         cg.nome as cargo,
         cg.salario_base
