@@ -2606,51 +2606,54 @@ app.delete("/api/measurements/:id", autenticarToken, async (req, res) => {
 /**
  * ROTA: TENDÊNCIA HISTÓRICA DE PERFORMANCE
  * Gera a série temporal para gráficos de linha (OEE vs Estabilidade).
+ * ✅ CORRIGIDO: Agora usa dados reais da tabela producao_oee
  */
 app.get("/api/history/line/:linhaId", autenticarToken, async (req, res) => {
   const { linhaId } = req.params;
 
   try {
-    // 1. Query Única: Agregamos tudo via SQL para poupar memória e tempo de CPU
+    // Buscar dados agregados por mês da tabela producao_oee
     const query = `
-      WITH metricas_mensais AS (
+      WITH dados_por_mes AS (
         SELECT 
-          DATE_TRUNC('month', md.data_medicao) as mes,
-          AVG(md.valor_numerico) as avg_ciclo,
-          STDDEV(md.valor_numerico) as std_ciclo,
-          COUNT(*) as volume_dados
-        FROM medicoes_detalhadas md
-        JOIN posto_trabalho pt ON pt.id = md.posto_id
-        WHERE pt.linha_id = $1 AND md.tipo = 'ciclo'
-        GROUP BY 1
+          DATE_TRUNC('month', data) as mes,
+          AVG(oee) as oee_medio,
+          AVG(disponibilidade) as disponibilidade_media,
+          AVG(performance) as performance_media,
+          AVG(qualidade) as qualidade_media,
+          COUNT(*) as quantidade_registros
+        FROM producao_oee
+        WHERE linha_id = $1
+        GROUP BY DATE_TRUNC('month', data)
+        ORDER BY mes DESC
+        LIMIT 6
       )
       SELECT 
-        m.mes,
-        m.volume_dados as amostras,
-        ROUND(m.avg_ciclo, 2) as media_ciclo,
-        ROUND(m.std_ciclo, 2) as desvio_padrao,
-        lp.takt_time_segundos as takt_alvo,
-        -- Cálculo de OEE Mensal Baseado em Performance de Ciclo
-        ROUND(LEAST(100, (lp.takt_time_segundos / NULLIF(m.avg_ciclo, 0)) * 100), 2) as oee_performance
-      FROM metricas_mensais m
-      CROSS JOIN (SELECT takt_time_segundos FROM linhas_producao WHERE id = $1) lp
-      ORDER BY m.mes DESC
-      LIMIT 6;
+        TO_CHAR(mes, 'YYYY-MM') as periodo,
+        ROUND(COALESCE(oee_medio, 0), 2) as oee_performance,
+        ROUND(COALESCE(disponibilidade_media, 0), 2) as disponibilidade,
+        ROUND(COALESCE(performance_media, 0), 2) as performance,
+        ROUND(COALESCE(qualidade_media, 0), 2) as qualidade,
+        quantidade_registros as medicoes
+      FROM dados_por_mes
+      ORDER BY mes ASC
     `;
 
     const result = await pool.query(query, [linhaId]);
 
-    if (result.rowCount === 0) {
+    if (result.rows.length === 0) {
       return res.status(200).json({ 
         mensagem: "Histórico insuficiente para análise de tendência.",
-        dados: [] 
+        historico: [],
+        dados: []
       });
     }
 
     res.status(200).json({
       linha_id: linhaId,
-      periodo: "Últimos 6 meses",
-      historico: result.rows
+      periodo: "Últimos meses",
+      historico: result.rows,
+      dados: result.rows
     });
 
   } catch (error) {
