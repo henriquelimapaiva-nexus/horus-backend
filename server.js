@@ -8072,6 +8072,115 @@ app.delete("/api/elementos/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 📊 MÓDULO: EFICIÊNCIA DO POSTO (para gargalo)
+// ========================================
+
+/**
+ * ROTA: CALCULAR EFICIÊNCIA DE UM POSTO
+ * Retorna o OEE/eficiência do posto com base nos dados reais de produção
+ * ✅ CORRIGIDO: Rota adicionada para substituir station-efficiency que não existia
+ */
+app.get("/api/station-efficiency/:postoId", autenticarToken, async (req, res) => {
+  try {
+    const { postoId } = req.params;
+
+    // 1. Buscar dados do posto
+    const postoRes = await pool.query(`
+      SELECT pt.*, l.takt_time_segundos, l.meta_diaria
+      FROM posto_trabalho pt
+      JOIN linhas_producao l ON l.id = pt.linha_id
+      WHERE pt.id = $1
+    `, [postoId]);
+
+    if (postoRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Posto não encontrado" });
+    }
+
+    const posto = postoRes.rows[0];
+    const taktAlvo = parseFloat(posto.takt_time_segundos) || 0;
+    const tempoCiclo = parseFloat(posto.tempo_ciclo_segundos) || 0;
+    const disponibilidade = (parseFloat(posto.disponibilidade_percentual) || 100) / 100;
+
+    // 2. Calcular eficiência do posto
+    let eficiencia = 0;
+    let classificacao = "Sem dados";
+
+    if (taktAlvo > 0 && tempoCiclo > 0) {
+      // Eficiência = (takt / ciclo_real) * 100
+      const cicloReal = tempoCiclo / disponibilidade;
+      eficiencia = Math.min(100, Math.round((taktAlvo / cicloReal) * 100));
+
+      if (eficiencia >= 90) classificacao = "Excelente";
+      else if (eficiencia >= 75) classificacao = "Bom";
+      else if (eficiencia >= 60) classificacao = "Regular";
+      else classificacao = "Crítico";
+    }
+
+    // 3. Buscar medições recentes (últimos 30 dias)
+    const medicoesRes = await pool.query(`
+      SELECT tempo_ciclo_segundos, data_medicao
+      FROM ciclo_medicao
+      WHERE posto_id = $1
+        AND data_medicao >= CURRENT_DATE - INTERVAL '30 days'
+      ORDER BY data_medicao DESC
+      LIMIT 50
+    `, [postoId]);
+
+    let estabilidade = "Estável";
+    if (medicoesRes.rows.length >= 10) {
+      const tempos = medicoesRes.rows.map(m => parseFloat(m.tempo_ciclo_segundos));
+      const media = tempos.reduce((a, b) => a + b, 0) / tempos.length;
+      const desvio = Math.sqrt(tempos.reduce((a, b) => a + Math.pow(b - media, 2), 0) / tempos.length);
+      const cv = media > 0 ? (desvio / media) * 100 : 0;
+      
+      if (cv > 20) estabilidade = "Instável";
+      else if (cv > 10) estabilidade = "Estabilidade moderada";
+    }
+
+    // 4. Buscar perdas do posto (via linha_produto)
+    const perdasRes = await pool.query(`
+      SELECT 
+        COALESCE(SUM(pl.microparadas_minutos), 0) as microparadas,
+        COALESCE(SUM(pl.refugo_pecas), 0) as refugo
+      FROM perdas_linha pl
+      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+      JOIN posto_trabalho pt ON pt.linha_id = lp.linha_id
+      WHERE pt.id = $1
+        AND pl.data_perda >= CURRENT_DATE - INTERVAL '30 days'
+    `, [postoId]);
+
+    const perdas = perdasRes.rows[0];
+
+    res.status(200).json({
+      posto_id: parseInt(postoId),
+      posto_nome: posto.nome,
+      eficiencia_percentual: eficiencia,
+      classificacao: classificacao,
+      estabilidade: estabilidade,
+      tempo_ciclo_segundos: tempoCiclo,
+      disponibilidade_percentual: posto.disponibilidade_percentual || 100,
+      takt_alvo_segundos: taktAlvo,
+      ultimas_medicoes: medicoesRes.rows.length,
+      perdas_30dias: {
+        microparadas_minutos: parseFloat(perdas.microparadas) || 0,
+        refugo_pecas: parseInt(perdas.refugo) || 0
+      },
+      recomendacao: eficiencia < 60 ? "Intervenção urgente necessária" :
+                     eficiencia < 75 ? "Otimização recomendada" :
+                     eficiencia < 90 ? "Monitoramento periódico" :
+                     "Manter padrão atual"
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao calcular eficiência do posto:", error.message);
+    res.status(500).json({ 
+      erro: "Erro ao calcular eficiência do posto",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
