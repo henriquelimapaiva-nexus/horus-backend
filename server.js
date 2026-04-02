@@ -2606,15 +2606,16 @@ app.delete("/api/measurements/:id", autenticarToken, async (req, res) => {
 /**
  * ROTA: TENDÊNCIA HISTÓRICA DE PERFORMANCE
  * Gera a série temporal para gráficos de linha (OEE vs Estabilidade).
- * ✅ CORRIGIDO: Agora usa dados reais da tabela producao_oee
+ * ✅ CORRIGIDO: Agora inclui média de ciclo e desvio padrão
  */
 app.get("/api/history/line/:linhaId", autenticarToken, async (req, res) => {
   const { linhaId } = req.params;
 
   try {
     // Buscar dados agregados por mês da tabela producao_oee
+    // e também dados de ciclo das medições
     const query = `
-      WITH dados_por_mes AS (
+      WITH dados_oee_por_mes AS (
         SELECT 
           DATE_TRUNC('month', data) as mes,
           AVG(oee) as oee_medio,
@@ -2625,18 +2626,29 @@ app.get("/api/history/line/:linhaId", autenticarToken, async (req, res) => {
         FROM producao_oee
         WHERE linha_id = $1
         GROUP BY DATE_TRUNC('month', data)
-        ORDER BY mes DESC
-        LIMIT 6
+      ),
+      dados_ciclo_por_mes AS (
+        SELECT 
+          DATE_TRUNC('month', cm.data_medicao) as mes,
+          AVG(cm.tempo_ciclo_segundos::numeric) as media_ciclo,
+          STDDEV(cm.tempo_ciclo_segundos::numeric) as desvio_ciclo
+        FROM ciclo_medicao cm
+        JOIN posto_trabalho pt ON pt.id = cm.posto_id
+        WHERE pt.linha_id = $1
+        GROUP BY DATE_TRUNC('month', cm.data_medicao)
       )
       SELECT 
-        TO_CHAR(mes, 'YYYY-MM') as periodo,
-        ROUND(COALESCE(oee_medio, 0), 2) as oee_performance,
-        ROUND(COALESCE(disponibilidade_media, 0), 2) as disponibilidade,
-        ROUND(COALESCE(performance_media, 0), 2) as performance,
-        ROUND(COALESCE(qualidade_media, 0), 2) as qualidade,
-        quantidade_registros as medicoes
-      FROM dados_por_mes
-      ORDER BY mes ASC
+        TO_CHAR(COALESCE(o.mes, c.mes), 'YYYY-MM') as periodo,
+        ROUND(COALESCE(o.oee_medio, 0), 2) as oee_performance,
+        ROUND(COALESCE(o.disponibilidade_media, 0), 2) as disponibilidade,
+        ROUND(COALESCE(o.performance_media, 0), 2) as performance,
+        ROUND(COALESCE(o.qualidade_media, 0), 2) as qualidade,
+        COALESCE(o.quantidade_registros, 0) as medicoes,
+        ROUND(COALESCE(c.media_ciclo, 0), 2) as media_ciclo,
+        ROUND(COALESCE(c.desvio_ciclo, 0), 2) as desvio_padrao
+      FROM dados_oee_por_mes o
+      FULL OUTER JOIN dados_ciclo_por_mes c ON o.mes = c.mes
+      ORDER BY periodo ASC
     `;
 
     const result = await pool.query(query, [linhaId]);
