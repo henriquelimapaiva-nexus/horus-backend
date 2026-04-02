@@ -3874,39 +3874,61 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
 //  }
 //});
 
-// 5. Rota de Análise - AGORA COM DADOS REAIS
+// 5. Rota de Análise - CORRIGIDA COM DADOS REAIS
 app.get("/api/analise-linha/:linhaId", async (req, res) => {
   const { linhaId } = req.params;
   
   try {
-    const result = await pool.query(`
+    // Buscar dados reais da linha
+    const linhaRes = await pool.query(`
       SELECT 
-        COALESCE(AVG(eficiencia_percentual), 0) as eficiencia_percentual,
-        COALESCE(SUM(meta_diaria), 0) as capacidade_estimada_dia
-      FROM analise_linha al
-      JOIN linha_produto lp ON lp.linha_id = al.linha_id
-      WHERE al.linha_id = $1
-      GROUP BY al.linha_id
+        l.takt_time_segundos,
+        l.meta_diaria,
+        COALESCE(AVG(pt.tempo_ciclo_segundos), 0) as ciclo_medio,
+        MAX(pt.tempo_ciclo_segundos) as ciclo_maximo
+      FROM linhas_producao l
+      LEFT JOIN posto_trabalho pt ON pt.linha_id = l.id
+      WHERE l.id = $1
+      GROUP BY l.id
     `, [linhaId]);
     
-    if (result.rows.length > 0) {
+    if (linhaRes.rows.length > 0 && linhaRes.rows[0].meta_diaria > 0) {
+      const linha = linhaRes.rows[0];
+      const takt = linha.takt_time_segundos || 0;
+      const meta = linha.meta_diaria || 0;
+      const cicloGargalo = linha.ciclo_maximo || takt;
+      
+      // Calcular eficiência: (takt / ciclo_gargalo) * 100
+      let eficiencia = 0;
+      if (takt > 0 && cicloGargalo > 0) {
+        eficiencia = Math.min(100, Math.round((takt / cicloGargalo) * 100));
+      }
+      
+      // Calcular capacidade real
+      const capacidadeReal = cicloGargalo > 0 ? Math.floor((meta * takt) / cicloGargalo) : meta;
+      
       res.json({
-        eficiencia_percentual: parseFloat(result.rows[0].eficiencia_percentual) || 75.0,
-        capacidade_estimada_dia: parseInt(result.rows[0].capacidade_estimada_dia) || 1200
+        eficiencia_percentual: eficiencia,
+        capacidade_estimada_dia: capacidadeReal,
+        takt_time: takt,
+        meta_diaria: meta,
+        gargalo_ciclo: cicloGargalo
       });
     } else {
-      // Fallback para não quebrar o frontend
+      // Fallback quando não há dados
       res.json({
-        eficiencia_percentual: 75.0,
-        capacidade_estimada_dia: 1200
+        eficiencia_percentual: 0,
+        capacidade_estimada_dia: 0,
+        mensagem: "Configure o takt, meta e postos da linha"
       });
     }
     
   } catch (error) {
     console.error("❌ Erro na análise da linha:", error.message);
     res.json({
-      eficiencia_percentual: 75.0,
-      capacidade_estimada_dia: 1200
+      eficiencia_percentual: 0,
+      capacidade_estimada_dia: 0,
+      erro: error.message
     });
   }
 });
