@@ -3119,6 +3119,40 @@ app.get("/api/allocations/station/:postoId", autenticarToken, async (req, res) =
   }
 });
 
+/**
+ * ROTA: DESALOCAR COLABORADOR (UPDATE)
+ * Remove a alocação de um colaborador (set ativo = false)
+ */
+app.put("/api/allocations/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { ativo } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE alocacao_colaborador 
+       SET ativo = COALESCE($1, false),
+           data_fim = CASE WHEN COALESCE($1, false) = false THEN CURRENT_DATE ELSE data_fim END,
+           atualizado_em = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [ativo !== undefined ? ativo : false, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Alocação não encontrada." });
+    }
+
+    res.status(200).json({
+      mensagem: "Colaborador desalocado com sucesso!",
+      alocacao: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao desalocar:", error.message);
+    res.status(500).json({ erro: "Falha ao desalocar colaborador." });
+  }
+});
+
 // ========================================
 // 🤖 MÓDULO: GERADOR DE DIAGNÓSTICO (REPORTING)
 // ========================================
