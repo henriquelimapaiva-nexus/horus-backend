@@ -1689,6 +1689,7 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
       SELECT 
         lp.takt_time_segundos,
         lp.meta_diaria,
+        lp.horas_disponiveis,
         pt.tempo_ciclo_segundos,
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
       FROM linhas_producao lp
@@ -1702,17 +1703,20 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
 
     const taktAlvo = parseFloat(result.rows[0].takt_time_segundos) || 0;
     const metaDiaria = parseFloat(result.rows[0].meta_diaria) || 0;
+    const horasDisponiveis = parseFloat(result.rows[0].horas_disponiveis) || 8.8;
 
     let ritmoGargalo = 0;
     let totalPostos = 0;
+    let somaDisponibilidade = 0;
 
-    // Calcular ritmo do gargalo
+    // Calcular ritmo do gargalo e disponibilidade média
     result.rows.forEach(p => {
       if (p.tempo_ciclo_segundos !== null) {
         totalPostos++;
         const cicloNominal = parseFloat(p.tempo_ciclo_segundos) || 0;
         const disp = (parseFloat(p.disponibilidade) || 100) / 100;
         const cicloAjustado = disp > 0 ? cicloNominal / disp : 0;
+        somaDisponibilidade += disp;
 
         if (cicloAjustado > ritmoGargalo) ritmoGargalo = cicloAjustado;
       }
@@ -1730,6 +1734,28 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
       });
     }
 
+    // 🔥 CORREÇÃO: Disponibilidade baseada em dados reais
+    const disponibilidadeMedia = totalPostos > 0 ? somaDisponibilidade / totalPostos : 0.85;
+    const disponibilidade = Math.min(1, Math.max(0, disponibilidadeMedia));
+
+    // 🔥 Buscar dados de produção para calcular disponibilidade real
+    const producaoQuery = `
+      SELECT 
+        COALESCE(AVG(disponibilidade), 0) as disp_media,
+        COUNT(*) as total_registros
+      FROM producao_oee
+      WHERE linha_id = $1
+    `;
+    const producaoRes = await pool.query(producaoQuery, [linhaId]);
+    
+    let disponibilidadeReal = disponibilidade;
+    if (producaoRes.rows[0]?.total_registros > 0) {
+      const dispFromOEE = parseFloat(producaoRes.rows[0]?.disp_media) / 100;
+      if (dispFromOEE > 0) {
+        disponibilidadeReal = Math.min(1, Math.max(0, dispFromOEE));
+      }
+    }
+
     // 2. 🔥 BUSCAR DADOS DE QUALIDADE (REFUGO)
     const qualidadeQuery = `
       SELECT 
@@ -1744,9 +1770,6 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
     const totalRetrabalho = parseInt(qualidadeRes.rows[0]?.total_retrabalho) || 0;
 
     // 3. 🔥 CÁLCULO DOS PILARES OEE
-    // Disponibilidade (tempo disponível vs tempo planejado)
-    const disponibilidade = 0.90; // Placeholder - ideal seria buscar tempo real
-    
     // Performance (ritmo teórico vs ritmo real)
     const performance = Math.min(1, taktAlvo / ritmoGargalo);
     
@@ -1755,7 +1778,7 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
     const qualidade = metaDiaria > 0 ? Math.max(0, pecasBoas / metaDiaria) : 0;
 
     // OEE Final = Disponibilidade × Performance × Qualidade
-    const oeeCalculado = disponibilidade * performance * qualidade;
+    const oeeCalculado = disponibilidadeReal * performance * qualidade;
 
     // 4. CAPACIDADE REAL (considerando qualidade)
     const capacidadeReal = Math.floor((metaDiaria * taktAlvo) / ritmoGargalo);
@@ -1763,7 +1786,7 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
 
     // 5. 🔥 NOVO: Cálculo dos 3 pilares
     const pilares = {
-      disponibilidade_percentual: (disponibilidade * 100).toFixed(2),
+      disponibilidade_percentual: (disponibilidadeReal * 100).toFixed(2),
       performance_percentual: (performance * 100).toFixed(2),
       qualidade_percentual: (qualidade * 100).toFixed(2),
       oee_percentual: (oeeCalculado * 100).toFixed(2)
@@ -1776,6 +1799,7 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
       gargalo_identificado: ritmoGargalo,
       takt_time: taktAlvo,
       meta_diaria: metaDiaria,
+      horas_disponiveis: horasDisponiveis,
       // 🔥 NOVO: 3 pilares do OEE
       pilares: {
         disponibilidade: parseFloat(pilares.disponibilidade_percentual),
@@ -1793,7 +1817,8 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
         capacidade_teorica: capacidadeReal,
         producao_real_estimada: producaoRealComQualidade,
         meta_diaria: metaDiaria,
-        total_postos: totalPostos
+        total_postos: totalPostos,
+        disponibilidade_calculada: (disponibilidadeReal * 100).toFixed(2) + "%"
       }
     });
 
