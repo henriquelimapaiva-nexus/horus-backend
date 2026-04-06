@@ -8275,7 +8275,7 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
 
       // 5.3 CUSTO POR MINUTO (para perdas)
       const minutosTotais = diasMes * horasDia * 60;
-      const custoMinuto = custoTotal / minutosTotais;
+      const custoMinuto = custoLinha / minutosTotais;
 
       // 5.4 PERDA DE SETUP
       let perdasSetup = 0;
