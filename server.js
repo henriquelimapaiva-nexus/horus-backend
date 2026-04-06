@@ -4993,7 +4993,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     // 🔥 NOVO: VALIDAR ROI MÍNIMO DO CLIENTE (40% ao ano)
     // ========================================
-    const ROI_MINIMO_CLIENTE = 0.40;  // 40% ao ano é o mínimo aceitável
+    const ROI_MINIMO_CLIENTE = 0.25;  // 40% ao ano é o mínimo aceitável
     const PAYBACK_MAXIMO_MESES = 18;   // 18 meses é o máximo aceitável
     
     let alertaROI = null;
@@ -5022,10 +5022,18 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     const precoIdealArredondado = Math.round(precoIdeal / 1000) * 1000;
     const precoMaximo = Math.round(precoMaximoEtico / 1000) * 1000;
 
+    // Garantir que mínimo < ideal < máximo
+    if (precoMinimo >= precoIdealArredondado) {
+      precoMinimo = Math.round(precoIdealArredondado * 0.7 / 1000) * 1000;
+    }
+    if (precoMaximo <= precoIdealArredondado) {
+      precoMaximo = Math.round(precoIdealArredondado * 1.3 / 1000) * 1000;
+    }
+
     // ========================================
     // CÁLCULO DO PREÇO DA FASE 1 (DIAGNÓSTICO)
     // ========================================
-    const precoFase1 = (dados.faturamento_anual * 0.002) + (numeroLinhas * 1500);
+    const precoFase1 = (dados.faturamento_anual * 0.3) + (numeroLinhas * 1500);
     let precoFase1Arredondado = Math.round(precoFase1 / 1000) * 1000;
     if (precoFase1Arredondado < 5000) {
       precoFase1Arredondado = 5000;
