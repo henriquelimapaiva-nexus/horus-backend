@@ -8181,16 +8181,14 @@ app.get("/api/station-efficiency/:postoId", autenticarToken, async (req, res) =>
 });
 
 // ========================================
-// 🚀 ROTA UNIFICADA: TODOS OS DADOS DA EMPRESA
+// 🚀 ROTA UNIFICADA: TODOS OS DADOS DA EMPRESA (CORRIGIDA)
 // ========================================
 
 app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) => {
   const { empresaId } = req.params;
 
   try {
-    // ========================================
     // 1. DADOS BÁSICOS DA EMPRESA
-    // ========================================
     const empresaRes = await pool.query(
       "SELECT id, nome, cnpj, segmento, dias_produtivos_mes FROM empresas WHERE id = $1",
       [empresaId]
@@ -8204,9 +8202,7 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
     const diasMes = empresa.dias_produtivos_mes || 22;
     const horasDia = 8;
 
-    // ========================================
     // 2. LINHAS DA EMPRESA
-    // ========================================
     const linhasRes = await pool.query(
       "SELECT * FROM linhas_producao WHERE empresa_id = $1 ORDER BY nome",
       [empresaId]
@@ -8219,73 +8215,91 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         linhas: [],
         resumo: {
           totalLinhas: 0,
+          totalColaboradores: 0,
+          totalAlocacoesAtivas: 0,
           custoMaoObra: 0,
           faturamento: 0,
           perdas: { setup: 0, micro: 0, refugo: 0, total: 0 },
           oeeMedio: 0,
           roi: { investimento: 50000, ganhoMensal: 0, payback: 0, roiAnual: 0 }
-        }
+        },
+        colaboradores: [],
+        alocacoes: [],
+        evolucao: []
       });
     }
 
-    // ========================================
-    // 3. CARGOS (para cálculo de custo)
-    // ========================================
+    // 3. BUSCAR CARGOS UMA ÚNICA VEZ
     const cargosRes = await pool.query(
       "SELECT * FROM cargos WHERE empresa_id = $1",
       [empresaId]
     );
     const cargos = cargosRes.rows;
 
-    // ========================================
-    // 4. VARIÁVEIS PARA ACUMULAR
-    // ========================================
-    let custoTotal = 0;
+    // 4. BUSCAR COLABORADORES
+    const colaboradoresRes = await pool.query(`
+      SELECT c.id, c.nome, ca.nome as cargo_nome, ca.salario_base, ca.encargos_percentual
+      FROM colaborador c
+      LEFT JOIN cargos ca ON ca.id = c.cargo_id
+      WHERE c.empresa_id = $1
+    `, [empresaId]);
+
+    // 5. BUSCAR ALOCAÇÕES ATIVAS
+    const alocacoesRes = await pool.query(`
+      SELECT a.id, a.colaborador_id, a.posto_id, a.turno, a.ativo,
+        c.nome as colaborador_nome,
+        pt.nome as posto_nome,
+        l.nome as linha_nome
+      FROM alocacao_colaborador a
+      JOIN colaborador c ON c.id = a.colaborador_id
+      JOIN posto_trabalho pt ON pt.id = a.posto_id
+      JOIN linhas_producao l ON l.id = pt.linha_id
+      WHERE a.ativo = true AND l.empresa_id = $1
+    `, [empresaId]);
+
+    // 6. VARIÁVEIS PARA ACUMULAR
+    let custoTotalMaoObra = 0;
     let faturamentoTotal = 0;
     let perdasSetupTotal = 0;
     let perdasMicroTotal = 0;
     let perdasRefugoTotal = 0;
-    let oees = [];
+    let listaOEE = [];
     const detalhamentoLinhas = [];
 
-    // ========================================
-    // 5. PROCESSAR CADA LINHA
-    // ========================================
+    // 7. PROCESSAR CADA LINHA
     for (const linha of linhas) {
-      // 5.1 POSTOS DA LINHA
+      // 7.1 POSTOS DA LINHA
       const postosRes = await pool.query(
         "SELECT * FROM posto_trabalho WHERE linha_id = $1 ORDER BY ordem_fluxo",
         [linha.id]
       );
       const postos = postosRes.rows;
 
-      // 5.2 CÁLCULO DO CUSTO DA LINHA
+      // 7.2 CUSTO DA LINHA (soma dos salários dos colaboradores alocados)
       let custoLinha = 0;
-      for (const posto of postos) {
-        if (posto.cargo_id) {
-          const cargo = cargos.find(c => c.id === posto.cargo_id);
-          if (cargo) {
-            const salario = parseFloat(cargo.salario_base) || 0;
-            const encargos = parseFloat(cargo.encargos_percentual) || 70;
-            custoLinha += salario * (1 + encargos / 100);
-          }
+      const alocacoesLinha = alocacoesRes.rows.filter(a => a.linha_nome === linha.nome);
+      for (const aloc of alocacoesLinha) {
+        const colaborador = colaboradoresRes.rows.find(c => c.id === aloc.colaborador_id);
+        if (colaborador) {
+          const salario = parseFloat(colaborador.salario_base) || 0;
+          const encargos = parseFloat(colaborador.encargos_percentual) || 70;
+          custoLinha += salario * (1 + encargos / 100);
         }
       }
-      custoTotal += custoLinha;
+      custoTotalMaoObra += custoLinha;
 
-      // 5.3 CUSTO POR MINUTO (para perdas)
+      // 7.3 CUSTO POR MINUTO (baseado no custo da linha)
       const minutosTotais = diasMes * horasDia * 60;
       const custoMinuto = custoLinha / minutosTotais;
 
-      // 5.4 PERDA DE SETUP
+      // 7.4 CALCULAR PERDA DE SETUP
       let perdasSetup = 0;
       for (const posto of postos) {
-        if (posto.tempo_setup_minutos) {
-          perdasSetup += parseFloat(posto.tempo_setup_minutos) * custoMinuto * diasMes;
-        }
+        const tempoSetup = parseFloat(posto.tempo_setup_minutos) || 0;
+        perdasSetup += tempoSetup * custoMinuto * diasMes;
       }
 
-      // 5.5 PRODUTOS DA LINHA
+      // 7.5 PRODUTOS DA LINHA
       const produtosQuery = `
         SELECT 
           lp.id as vinculo_id,
@@ -8301,11 +8315,13 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       const produtosRes = await pool.query(produtosQuery, [linha.id]);
       const produtos = produtosRes.rows;
 
-      // 5.6 PERDAS REAIS (MICRO E REFUGO)
+      // 7.6 PERDAS REAIS (MICRO E REFUGO)
       const perdasQuery = `
         SELECT 
-          pl.*,
-          p.nome as produto_nome
+          pl.microparadas_minutos,
+          pl.refugo_pecas,
+          p.nome as produto_nome,
+          p.valor_unitario
         FROM perdas_linha pl
         JOIN linha_produto lp ON lp.id = pl.linha_produto_id
         JOIN produtos p ON p.id = lp.produto_id
@@ -8329,12 +8345,11 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         }
       }
 
-      const perdasLinha = perdasSetup + perdasMicro + perdasRefugo;
       perdasSetupTotal += perdasSetup;
       perdasMicroTotal += perdasMicro;
       perdasRefugoTotal += perdasRefugo;
 
-      // 5.7 FATURAMENTO REAL
+      // 7.7 FATURAMENTO REAL
       const producaoQuery = `
         SELECT 
           COALESCE(AVG(pecas_boas), 0) as media_pecas_boas,
@@ -8352,10 +8367,10 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         faturamentoLinha = producaoMediaDia * valorMedio * diasMes;
       }
       faturamentoTotal += faturamentoLinha;
-      oees.push(oeeLinha);
+      listaOEE.push(oeeLinha);
 
-      // 5.8 GARGALO DA LINHA (posto com maior tempo de ciclo)
-      let gargalo = null;
+      // 7.8 GARGALO
+      let gargalo = "Não identificado";
       let maiorCiclo = 0;
       for (const posto of postos) {
         const ciclo = parseFloat(posto.tempo_ciclo_segundos) || 0;
@@ -8365,7 +8380,7 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         }
       }
 
-      // 5.9 DETALHAMENTO DA LINHA
+      // 7.9 DETALHAMENTO
       detalhamentoLinhas.push({
         id: linha.id,
         nome: linha.nome,
@@ -8375,12 +8390,12 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         custoMensal: Math.round(custoLinha * 100) / 100,
         faturamento: Math.round(faturamentoLinha * 100) / 100,
         oee: Math.round(oeeLinha * 100) / 100,
-        gargalo: gargalo || "Não identificado",
+        gargalo: gargalo,
         perdas: {
           setup: Math.round(perdasSetup * 100) / 100,
           micro: Math.round(perdasMicro * 100) / 100,
           refugo: Math.round(perdasRefugo * 100) / 100,
-          total: Math.round(perdasLinha * 100) / 100
+          total: Math.round((perdasSetup + perdasMicro + perdasRefugo) * 100) / 100
         },
         produtos: produtos.map(p => ({
           id: p.produto_id,
@@ -8400,39 +8415,10 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       });
     }
 
-    // ========================================
-    // 6. COLABORADORES E ALOCAÇÕES
-    // ========================================
-    const colaboradoresRes = await pool.query(`
-      SELECT 
-        c.id, c.nome, ca.nome as cargo_nome,
-        ca.salario_base, ca.encargos_percentual
-      FROM colaborador c
-      LEFT JOIN cargos ca ON ca.id = c.cargo_id
-      WHERE c.empresa_id = $1
-    `, [empresaId]);
-
-    const alocacoesRes = await pool.query(`
-      SELECT 
-        a.id, a.colaborador_id, a.posto_id, a.turno, a.ativo,
-        c.nome as colaborador_nome,
-        pt.nome as posto_nome,
-        l.nome as linha_nome
-      FROM alocacao_colaborador a
-      JOIN colaborador c ON c.id = a.colaborador_id
-      JOIN posto_trabalho pt ON pt.id = a.posto_id
-      JOIN linhas_producao l ON l.id = pt.linha_id
-      WHERE a.ativo = true
-      AND l.empresa_id = $1
-    `, [empresaId]);
-
-    // ========================================
-    // 7. PROJEÇÕES E EVOLUÇÃO
-    // ========================================
     const perdasTotais = perdasSetupTotal + perdasMicroTotal + perdasRefugoTotal;
-    const oeeMedio = oees.length > 0 ? oees.reduce((a, b) => a + b, 0) / oees.length : 0;
+    const oeeMedio = listaOEE.length > 0 ? listaOEE.reduce((a, b) => a + b, 0) / listaOEE.length : 0;
 
-    // Evolução dos últimos 6 meses
+    // 8. EVOLUÇÃO
     const evolucaoQuery = `
       SELECT 
         DATE_TRUNC('month', data) as mes,
@@ -8451,17 +8437,13 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       producao: parseInt(row.total_producao) || 0
     }));
 
-    // ========================================
-    // 8. ROI
-    // ========================================
+    // 9. ROI
     const investimentoSugerido = 50000;
     const ganhoMensal = perdasTotais * 0.3;
     const payback = ganhoMensal > 0 ? investimentoSugerido / ganhoMensal : 999;
     const roiAnual = ganhoMensal > 0 ? (ganhoMensal * 12 / investimentoSugerido) * 100 : 0;
 
-    // ========================================
-    // 9. RESPOSTA UNIFICADA
-    // ========================================
+    // 10. RESPOSTA
     res.json({
       empresa: {
         id: empresa.id,
@@ -8474,7 +8456,7 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         totalLinhas: linhas.length,
         totalColaboradores: colaboradoresRes.rows.length,
         totalAlocacoesAtivas: alocacoesRes.rows.length,
-        custoMaoObra: Math.round(custoTotal * 100) / 100,
+        custoMaoObra: Math.round(custoTotalMaoObra * 100) / 100,
         faturamento: Math.round(faturamentoTotal * 100) / 100,
         perdas: {
           setup: Math.round(perdasSetupTotal * 100) / 100,
