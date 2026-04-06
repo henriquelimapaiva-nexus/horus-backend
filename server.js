@@ -4978,7 +4978,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     // PREÇO IDEAL (EQUILÍBRIO)
     // ========================================
-    let precoIdeal = custoTotalMinimo * 1.4;
+    let precoIdeal = custoTotalMinimo * 1.6;
     
     if (dados.urgencia === 'alta') precoIdeal *= 1.1;
     if (dados.urgencia === 'baixa') precoIdeal *= 0.95;
@@ -4991,9 +4991,10 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     precoIdeal = Math.max(precoIdeal, custoTotalMinimo);
 
     // ========================================
-    // 🔥 NOVO: VALIDAR ROI MÍNIMO DO CLIENTE (40% ao ano)
+    // 🔥 VALIDAR ROI MÍNIMO E MÁXIMO DO CLIENTE
     // ========================================
-    const ROI_MINIMO_CLIENTE = 0.25;  // 40% ao ano é o mínimo aceitável
+    const ROI_MINIMO_CLIENTE = 0.25;  // 25% ao ano é o mínimo aceitável
+    const ROI_MAXIMO_CLIENTE = 1.00;  // 100% ao ano é o máximo aceitável
     const PAYBACK_MAXIMO_MESES = 18;   // 18 meses é o máximo aceitável
     
     let alertaROI = null;
@@ -5002,12 +5003,22 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     const roiClienteCalculado = ((ganhoAnualEstimado - precoIdeal) / precoIdeal) * 100;
     const paybackMesesCalculado = precoIdeal / ganhoMensalEstimado;
     
+    // Validar ROI mínimo (cliente ganha pouco)
     if (roiClienteCalculado < ROI_MINIMO_CLIENTE * 100) {
       alertaROI = `⚠️ ROI do cliente (${roiClienteCalculado.toFixed(0)}%) está abaixo do mínimo recomendado (${ROI_MINIMO_CLIENTE * 100}%). Considere reduzir o preço.`;
       // Ajusta o preço para garantir ROI mínimo
       const precoAjustado = ganhoAnualEstimado / (1 + ROI_MINIMO_CLIENTE);
       if (precoAjustado < precoIdeal) {
         precoIdeal = Math.max(precoAjustado, custoTotalMinimo);
+      }
+    }
+    
+    // Validar ROI máximo (cliente ganha muito - preço muito baixo)
+    if (roiClienteCalculado > ROI_MAXIMO_CLIENTE * 100) {
+      // Ajusta o preço para cima para reduzir o ROI
+      const precoAjustadoMaximo = ganhoAnualEstimado / (1 + ROI_MAXIMO_CLIENTE);
+      if (precoAjustadoMaximo > precoIdeal) {
+        precoIdeal = Math.min(precoAjustadoMaximo, precoMaximoEtico);
       }
     }
     
