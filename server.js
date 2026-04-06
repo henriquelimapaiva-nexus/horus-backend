@@ -5024,20 +5024,21 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
 
     // Garantir que mínimo < ideal < máximo
     if (precoMinimo >= precoIdealArredondado) {
-      precoMinimo = Math.round(precoIdealArredondado * 0.7 / 1000) * 1000;
+      precoMinimo = Math.round(precoIdealArredondado * 0.7);
     }
     if (precoMaximo <= precoIdealArredondado) {
-      precoMaximo = Math.round(precoIdealArredondado * 1.3 / 1000) * 1000;
+      precoMaximo = Math.round(precoIdealArredondado * 1.3);
     }
 
     // ========================================
-    // CÁLCULO DO PREÇO DA FASE 1 (DIAGNÓSTICO)
+    // CÁLCULO DO PREÇO DA FASE 1 (DIAGNÓSTICO) - CORRIGIDO
     // ========================================
-    const precoFase1 = (dados.faturamento_anual * 0.3) + (numeroLinhas * 1500);
-    let precoFase1Arredondado = Math.round(precoFase1 / 1000) * 1000;
-    if (precoFase1Arredondado < 5000) {
-      precoFase1Arredondado = 5000;
-    }
+    // Diagnóstico = 30% do valor total do projeto (NÃO do faturamento!)
+    let precoFase1Arredondado = Math.round(precoIdealArredondado * 0.3);
+    
+    // Garantir limites mínimos e máximos
+    if (precoFase1Arredondado < 5000) precoFase1Arredondado = 5000;
+    if (precoFase1Arredondado > 15000) precoFase1Arredondado = 15000;
 
     // ========================================
     // INDICADORES DE RETORNO (RECALCULADOS)
