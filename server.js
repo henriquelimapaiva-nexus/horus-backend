@@ -4827,13 +4827,13 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     }
 
     // ========================================
-    // BENCHMARKS POR SETOR (VALORES REALISTAS DE MERCADO)
+    // BENCHMARKS POR SETOR (VALORES REALISTAS DE MERCADO - CORRIGIDOS)
     // ========================================
     const benchmarks = {
       automotivo: { 
         perda_percentual: 0.06,
         oee_medio: 78, 
-        potencial_melhoria: 0.05,
+        potencial_melhoria: 0.12,     // CORRIGIDO: 0.05 → 0.12 (12%)
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 22000
@@ -4841,7 +4841,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       metalurgico: { 
         perda_percentual: 0.07,
         oee_medio: 72, 
-        potencial_melhoria: 0.05,
+        potencial_melhoria: 0.12,     // CORRIGIDO: 0.05 → 0.12 (12%)
         horas_diagnostico_por_linha: 28,
         horas_implementacao_por_linha: 65,
         preco_base: 20000
@@ -4849,7 +4849,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       alimenticio: { 
         perda_percentual: 0.05,
         oee_medio: 82, 
-        potencial_melhoria: 0.04,
+        potencial_melhoria: 0.10,     // CORRIGIDO: 0.04 → 0.10 (10%)
         horas_diagnostico_por_linha: 20,
         horas_implementacao_por_linha: 50,
         preco_base: 18000
@@ -4857,7 +4857,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       quimico: { 
         perda_percentual: 0.06,
         oee_medio: 80, 
-        potencial_melhoria: 0.05,
+        potencial_melhoria: 0.11,     // CORRIGIDO: 0.05 → 0.11 (11%)
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 20000
@@ -4865,7 +4865,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       farmaceutico: { 
         perda_percentual: 0.04,
         oee_medio: 85, 
-        potencial_melhoria: 0.03,
+        potencial_melhoria: 0.08,     // CORRIGIDO: 0.03 → 0.08 (8%)
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 18000
@@ -4873,7 +4873,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       outros: { 
         perda_percentual: 0.06,
         oee_medio: 75, 
-        potencial_melhoria: 0.05,
+        potencial_melhoria: 0.12,     // CORRIGIDO: 0.05 → 0.12 (12%)
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 18000
@@ -4936,9 +4936,9 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     if (dados.complexidade === 'alta') fatorComplexidade += 0.05;
     if (dados.complexidade === 'baixa') fatorComplexidade -= 0.03;
     
-    // Limitar potencial de melhoria entre 3% e 8%
+    // Limitar potencial de melhoria entre 5% e 15% (CORRIGIDO: antes era 3%-8%)
     let potencialMelhoria = benchmark.potencial_melhoria * fatorComplexidade;
-    potencialMelhoria = Math.min(0.08, Math.max(0.03, potencialMelhoria));
+    potencialMelhoria = Math.min(0.15, Math.max(0.05, potencialMelhoria));
     
     const ganhoAnualEstimado = perdaAnualEstimada * potencialMelhoria;
     const ganhoMensalEstimado = ganhoAnualEstimado / 12;
@@ -4993,7 +4993,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     let precoFase1 = Math.round(precoProjeto * 0.3 / 1000) * 1000;
     if (precoFase1 < 4000) precoFase1 = 4000;
-    if (precoFase1 > 12000) precoFase1 = 12000;
+    if (precoFase1 > 15000) precoFase1 = 15000;  // CORRIGIDO: limite máximo aumentado para R$ 15.000
 
     // ========================================
     // INDICADORES DE RETORNO
