@@ -5018,9 +5018,9 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     // FAIXA DE NEGOCIAÇÃO
     // ========================================
-    const precoMinimo = Math.round(custoTotalMinimo / 1000) * 1000;
-    const precoIdealArredondado = Math.round(precoIdeal / 1000) * 1000;
-    const precoMaximo = Math.round(precoMaximoEtico / 1000) * 1000;
+    let precoMinimo = Math.round(custoTotalMinimo / 1000) * 1000;
+    let precoIdealArredondado = Math.round(precoIdeal / 1000) * 1000;
+    let precoMaximo = Math.round(precoMaximoEtico / 1000) * 1000;
 
     // Garantir que mínimo < ideal < máximo
     if (precoMinimo >= precoIdealArredondado) {
