@@ -4944,31 +4944,43 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     const ganhoMensalEstimado = ganhoAnualEstimado / 12;
 
     // ========================================
-    // PREÇO DO PROJETO (BASEADO EM MERCADO + AJUSTES)
+    // PREÇO DO PROJETO (BASEADO EM VALOR PARA O CLIENTE)
     // ========================================
-    let precoProjeto = benchmark.preco_base;
     
-    // Ajuste por número de linhas (+R$ 2.000 por linha adicional)
+    // 1. Preço base = 20% do ganho anual estimado (benchmark de mercado)
+    let precoProjeto = ganhoAnualEstimado * 0.20;
+    
+    // 2. Mínimo para projetos de valor: R$ 30.000
+    if (precoProjeto < 30000) precoProjeto = 30000;
+    
+    // 3. Aplicar fatores de valor agregado (sua expertise + Hórus)
+    const FATOR_FORMACAO = 1.15;      // Engenharia FEI + Pós FGV
+    const FATOR_HORUS = 1.20;         // Plataforma proprietária
+    const FATOR_METODOLOGIA = 1.10;   // Método Nexus comprovado
+    
+    precoProjeto = precoProjeto * FATOR_FORMACAO * FATOR_HORUS * FATOR_METODOLOGIA;
+    
+    // 4. Ajustes por número de linhas (+R$ 5.000 por linha adicional)
     if (numeroLinhas > 1) {
-      precoProjeto += (numeroLinhas - 1) * 2000;
+      precoProjeto += (numeroLinhas - 1) * 5000;
     }
     
-    // Ajuste por complexidade
-    if (dados.complexidade === 'alta') precoProjeto *= 1.1;
+    // 5. Ajustes por complexidade
+    if (dados.complexidade === 'alta') precoProjeto *= 1.15;
     if (dados.complexidade === 'baixa') precoProjeto *= 0.95;
     
-    // Ajuste por urgência
-    if (dados.urgencia === 'alta') precoProjeto *= 1.05;
+    // 6. Ajustes por urgência
+    if (dados.urgencia === 'alta') precoProjeto *= 1.10;
     if (dados.urgencia === 'baixa') precoProjeto *= 0.95;
     
-    // Ajuste por acesso a dados
-    if (dados.acesso_dados === 'restrito') precoProjeto *= 1.05;
+    // 7. Ajuste por acesso a dados (restrito = mais trabalho)
+    if (dados.acesso_dados === 'restrito') precoProjeto *= 1.10;
     
-    // Ajuste por projeto piloto
+    // 8. Projeto piloto (desconto para primeiro cliente)
     if (dados.projeto_piloto) precoProjeto *= 0.85;
     
-    // Limitar faixa de preço (mínimo R$ 12.000, máximo R$ 40.000)
-    precoProjeto = Math.min(40000, Math.max(12000, Math.round(precoProjeto / 1000) * 1000));
+    // 9. Limitar faixa de preço (mínimo R$ 30.000, máximo R$ 150.000)
+    precoProjeto = Math.min(150000, Math.max(30000, Math.round(precoProjeto / 5000) * 5000));
 
     // ========================================
     // FAIXA DE NEGOCIAÇÃO (15% para baixo, 30% para cima)
