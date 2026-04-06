@@ -1508,7 +1508,7 @@ app.get("/api/simulation/:linhaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 📊 MOTOR DE CÁLCULO OEE (VERSÃO NEXUS - FINAL)
+// 📊 MOTOR DE CÁLCULO OEE (VERSÃO NEXUS - CORRIGIDO)
 // ========================================
 app.post("/api/simulador-oee", async (req, res) => {
   try {
@@ -1528,11 +1528,20 @@ app.post("/api/simulador-oee", async (req, res) => {
       const tempoOperandoSegundos = tempoPlanejadoSegundos * disponibilidadeDecimal;
 
       // 2. IDENTIFICAÇÃO DO GARGALO (Maior ciclo entre os postos)
-      const temposCiclo = produto.postos.map(p => p.tempo_ciclo || 0);
+      const temposCiclo = produto.postos?.map(p => p.tempo_ciclo || 0) || [0];
       const gargalo = Math.max(...temposCiclo) || 1; // Evita divisão por zero
       
+      // 3. 🔥 CORREÇÃO: Buscar TAKT REAL do produto (se disponível)
+      let taktReal = produto.takt || gargalo;
+      
+      // Se o takt veio do frontend, validar se é razoável
+      if (produto.takt && produto.takt > 0) {
+        taktReal = produto.takt;
+      } else if (produto.takt_time_segundos && produto.takt_time_segundos > 0) {
+        taktReal = produto.takt_time_segundos;
+      }
+      
       // 3. CÁLCULO DE CAPACIDADE E PRODUÇÃO
-      // Capacidade Bruta = Segundos Disponíveis / Ciclo do Gargalo
       const capacidadeBruta = Math.floor(tempoOperandoSegundos / gargalo);
       
       // Produção Boa = Capacidade * Índice de Qualidade
@@ -1542,11 +1551,9 @@ app.post("/api/simulador-oee", async (req, res) => {
       // 4. CÁLCULO DOS PILARES OEE (Normalizados 0 a 1)
       const disponibilidadeOEE = disponibilidadeDecimal;
       
-      // Performance = (Produção Real * Takt Ideal) / Tempo Operando Real
-      // Nota: Se o Takt não for informado, usamos o próprio gargalo como referência
-      const taktIdeal = produto.takt || gargalo;
-      const performanceOEE = tempoOperandoSegundos > 0 
-        ? (capacidadeBruta * taktIdeal) / tempoOperandoSegundos 
+      // 🔥 CORREÇÃO: Performance usando TAKT REAL
+      const performanceOEE = tempoOperandoSegundos > 0 && taktReal > 0
+        ? Math.min(1, (capacidadeBruta * taktReal) / tempoOperandoSegundos)
         : 0;
 
       const qualidadeOEE = capacidadeBruta > 0 ? producaoBoa / capacidadeBruta : 0;
@@ -1557,14 +1564,15 @@ app.post("/api/simulador-oee", async (req, res) => {
       // 5. COMPILAÇÃO DO RELATÓRIO
       resultados.push({
         produto: produto.produto_nome,
-        meta_diaria_planejada: produto.metaDiaria,
+        meta_diaria_planejada: produto.metaDiaria || 0,
         capacidade_bruta_dia: capacidadeBruta,
         producao_boa_dia: producaoBoa,
         deficit_pecas_dia: Math.max(0, (produto.metaDiaria || 0) - producaoBoa),
         gargalo_identificado: `${gargalo}s`,
+        takt_utilizado: taktReal,
         indicadores: {
           disponibilidade_percentual: (disponibilidadeOEE * 100).toFixed(2),
-          performance_percentual: (Math.min(performanceOEE, 1) * 100).toFixed(2),
+          performance_percentual: (performanceOEE * 100).toFixed(2),
           qualidade_percentual: (qualidadeOEE * 100).toFixed(2),
           oee_global_percentual: (oeeFinal * 100).toFixed(2)
         }
@@ -1573,7 +1581,7 @@ app.post("/api/simulador-oee", async (req, res) => {
 
     // Resposta final para o Front-end/Thunder Client
     res.status(200).json({
-      status: "sucesso_v2", // Para confirmar que o código novo está rodando
+      status: "sucesso_v2",
       linha_id: linhaId,
       timestamp: new Date().toISOString(),
       analise_por_produto: resultados
