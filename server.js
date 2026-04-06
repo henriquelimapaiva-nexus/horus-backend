@@ -5833,7 +5833,9 @@ CLÁUSULA 4 – VALOR E CONDIÇÕES DE PAGAMENTO
 -------------------------------------------------------------------------------
 
 4.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorNegociado)} (${valorNegociado.toLocaleString('pt-BR')} reais).
-${valorOriginalIA ? `\n4.1.1. Registro interno: O valor originalmente calculado pela IA de Precificação Hórus foi de ${formatarMoeda(valorOriginalIA)}, tendo sido ajustado por negociação entre as partes.\n` : ''}
+
+4.1.1. O valor total estimado para o projeto completo (Fase 1 + Fase 2 + Fase 3) é de ${formatarMoeda(valorOriginalIA)}. O presente contrato refere-se exclusivamente à Fase 1 (Diagnóstico), no valor de ${formatarMoeda(valorNegociado)}, sendo que as Fases 2 e 3 serão objeto de contrato ou aditivo específico, após a conclusão do diagnóstico e com base nos dados reais coletados.
+
 4.2. O pagamento será efetuado em parcela única, na seguinte condição:
    Data de assinatura: ${formatarMoeda(valorNegociado)}
 
