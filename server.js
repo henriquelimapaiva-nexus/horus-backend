@@ -4793,7 +4793,7 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 4️⃣ IA DE PRECIFICAÇÃO PRÉ-CONTRATO (CORRIGIDA)
+// 4️⃣ IA DE PRECIFICAÇÃO PRÉ-CONTRATO (VERSÃO DEFINITIVA - CORRIGIDA)
 // ========================================
 
 /**
@@ -4827,50 +4827,56 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     }
 
     // ========================================
-    // BENCHMARKS POR SETOR (CORRIGIDOS - VALORES REALISTAS)
+    // BENCHMARKS POR SETOR (VALORES REALISTAS DE MERCADO)
     // ========================================
     const benchmarks = {
       automotivo: { 
-        perda_percentual: 0.08,      // CORRIGIDO: 18% → 25% (alta competitividade)
+        perda_percentual: 0.06,
         oee_medio: 78, 
-        potencial_melhoria: 0.10,    // CORRIGIDO: 15% → 20%
-        horas_diagnostico_por_linha: 30,
-        horas_implementacao_por_linha: 70
+        potencial_melhoria: 0.05,
+        horas_diagnostico_por_linha: 25,
+        horas_implementacao_por_linha: 60,
+        preco_base: 22000
       },
       metalurgico: { 
-        perda_percentual: 0.07,      // CORRIGIDO: manteve 22%
+        perda_percentual: 0.07,
         oee_medio: 72, 
-        potencial_melhoria: 0.09,    // CORRIGIDO: manteve 18%
-        horas_diagnostico_por_linha: 32,
-        horas_implementacao_por_linha: 75
+        potencial_melhoria: 0.05,
+        horas_diagnostico_por_linha: 28,
+        horas_implementacao_por_linha: 65,
+        preco_base: 20000
       },
       alimenticio: { 
-        perda_percentual: 0.05,      // CORRIGIDO: manteve 15% (margens menores)
+        perda_percentual: 0.05,
         oee_medio: 82, 
-        potencial_melhoria: 0.07,    // CORRIGIDO: manteve 12%
-        horas_diagnostico_por_linha: 25,
-        horas_implementacao_por_linha: 60
+        potencial_melhoria: 0.04,
+        horas_diagnostico_por_linha: 20,
+        horas_implementacao_por_linha: 50,
+        preco_base: 18000
       },
       quimico: { 
-        perda_percentual: 0.06,      // CORRIGIDO: manteve 16%
+        perda_percentual: 0.06,
         oee_medio: 80, 
-        potencial_melhoria: 0.08,    // CORRIGIDO: manteve 14%
-        horas_diagnostico_por_linha: 28,
-        horas_implementacao_por_linha: 65
+        potencial_melhoria: 0.05,
+        horas_diagnostico_por_linha: 25,
+        horas_implementacao_por_linha: 60,
+        preco_base: 20000
       },
       farmaceutico: { 
-        perda_percentual: 0.04,      // CORRIGIDO: manteve 10% (setor regulado)
+        perda_percentual: 0.04,
         oee_medio: 85, 
-        potencial_melhoria: 0.05,    // CORRIGIDO: 10% → 8%
-        horas_diagnostico_por_linha: 28,
-        horas_implementacao_por_linha: 65
+        potencial_melhoria: 0.03,
+        horas_diagnostico_por_linha: 25,
+        horas_implementacao_por_linha: 60,
+        preco_base: 18000
       },
       outros: { 
-        perda_percentual: 0.07,      // CORRIGIDO: 18% → 20%
+        perda_percentual: 0.06,
         oee_medio: 75, 
-        potencial_melhoria: 0.12,    // CORRIGIDO: 15% → 16%
-        horas_diagnostico_por_linha: 30,
-        horas_implementacao_por_linha: 70
+        potencial_melhoria: 0.05,
+        horas_diagnostico_por_linha: 25,
+        horas_implementacao_por_linha: 60,
+        preco_base: 18000
       }
     };
 
@@ -4895,10 +4901,10 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       if (projetosAnteriores.rows.length > 0) {
         const aprendizado = projetosAnteriores.rows[0];
         if (aprendizado.media_refugo > 100) {
-          benchmarks[dados.setor].potencial_melhoria += 0.03;
+          benchmarks[dados.setor].potencial_melhoria += 0.005;
         }
         if (aprendizado.media_microparadas > 200) {
-          benchmarks[dados.setor].potencial_melhoria += 0.03;
+          benchmarks[dados.setor].potencial_melhoria += 0.005;
         }
         console.log(`📊 Aprendizado aplicado: ${aprendizado.total_projetos} projetos anteriores do setor ${dados.setor}`);
       }
@@ -4921,142 +4927,85 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     let fatorComplexidade = 1.0;
     
     if (dados.problemas) {
-      if (dados.problemas.includes('produtividade')) fatorComplexidade += 0.03;
-      if (dados.problemas.includes('qualidade')) fatorComplexidade += 0.03;
-      if (dados.problemas.includes('manutencao')) fatorComplexidade += 0.03;
-      if (dados.problemas.includes('rh')) fatorComplexidade += 0.02;
+      if (dados.problemas.includes('produtividade')) fatorComplexidade += 0.01;
+      if (dados.problemas.includes('qualidade')) fatorComplexidade += 0.01;
+      if (dados.problemas.includes('manutencao')) fatorComplexidade += 0.005;
+      if (dados.problemas.includes('rh')) fatorComplexidade += 0.005;
     }
     
-    if (dados.complexidade === 'alta') fatorComplexidade += 0.08;
-    if (dados.complexidade === 'baixa') fatorComplexidade -= 0.05;
+    if (dados.complexidade === 'alta') fatorComplexidade += 0.05;
+    if (dados.complexidade === 'baixa') fatorComplexidade -= 0.03;
     
-    const potencialMelhoria = Math.min(0.30, benchmark.potencial_melhoria * fatorComplexidade);
+    // Limitar potencial de melhoria entre 3% e 8%
+    let potencialMelhoria = benchmark.potencial_melhoria * fatorComplexidade;
+    potencialMelhoria = Math.min(0.08, Math.max(0.03, potencialMelhoria));
+    
     const ganhoAnualEstimado = perdaAnualEstimada * potencialMelhoria;
     const ganhoMensalEstimado = ganhoAnualEstimado / 12;
 
     // ========================================
-    // CALCULAR CUSTO DO PROJETO
+    // PREÇO DO PROJETO (BASEADO EM MERCADO + AJUSTES)
     // ========================================
-    const seuValorHora = 120;
+    let precoProjeto = benchmark.preco_base;
     
-    let horasDiagnostico = 30 + (numeroLinhas * 8);
-    let horasImplementacao = 80 + (numeroLinhas * 15);
-    let horasAcompanhamento = 20 + (numeroLinhas * 5);
-    
-    if (dados.gestor_dedicado === 'parcial') {
-      horasDiagnostico *= 1.15;
-      horasImplementacao *= 1.15;
-    } else if (dados.gestor_dedicado === 'nao') {
-      horasDiagnostico *= 1.3;
-      horasImplementacao *= 1.3;
+    // Ajuste por número de linhas (+R$ 2.000 por linha adicional)
+    if (numeroLinhas > 1) {
+      precoProjeto += (numeroLinhas - 1) * 2000;
     }
     
-    if (dados.acesso_dados === 'mediado') {
-      horasDiagnostico *= 1.1;
-    } else if (dados.acesso_dados === 'restrito') {
-      horasDiagnostico *= 1.2;
-    }
+    // Ajuste por complexidade
+    if (dados.complexidade === 'alta') precoProjeto *= 1.1;
+    if (dados.complexidade === 'baixa') precoProjeto *= 0.95;
     
-    const totalHoras = horasDiagnostico + horasImplementacao + horasAcompanhamento;
-    const custoDireto = totalHoras * seuValorHora;
+    // Ajuste por urgência
+    if (dados.urgencia === 'alta') precoProjeto *= 1.05;
+    if (dados.urgencia === 'baixa') precoProjeto *= 0.95;
     
-    const custoViagem = dados.tem_viagem ? 2500 : 0;
-    const custoMaterial = 800;
-    const custoVariável = custoViagem + custoMaterial;
+    // Ajuste por acesso a dados
+    if (dados.acesso_dados === 'restrito') precoProjeto *= 1.05;
     
-    const custosIndiretos = custoDireto * 0.12;
-    const reservaTecnica = custoDireto * 0.08;
-    const margemMinima = custoDireto * 0.12;
+    // Ajuste por projeto piloto
+    if (dados.projeto_piloto) precoProjeto *= 0.85;
     
-    const custoTotalMinimo = custoDireto + custoVariável + custosIndiretos + reservaTecnica + margemMinima;
+    // Limitar faixa de preço (mínimo R$ 12.000, máximo R$ 40.000)
+    precoProjeto = Math.min(40000, Math.max(12000, Math.round(precoProjeto / 1000) * 1000));
 
     // ========================================
-    // PREÇO MÁXIMO ÉTICO (30% DO BENEFÍCIO)
+    // FAIXA DE NEGOCIAÇÃO (15% para baixo, 30% para cima)
     // ========================================
-    const precoMaximoEtico = ganhoAnualEstimado * 0.30;
+    const precoMinimo = Math.round(precoProjeto * 0.85 / 1000) * 1000;
+    const precoMaximo = Math.round(precoProjeto * 1.3 / 1000) * 1000;
 
     // ========================================
-    // PREÇO IDEAL (EQUILÍBRIO)
+    // PREÇO DA FASE 1 (DIAGNÓSTICO) - 30% DO TOTAL
     // ========================================
-    let precoIdeal = custoTotalMinimo * 1.6;
-    
-    if (dados.urgencia === 'alta') precoIdeal *= 1.1;
-    if (dados.urgencia === 'baixa') precoIdeal *= 0.95;
-    if (dados.complexidade === 'alta') precoIdeal *= 1.08;
-    if (dados.complexidade === 'baixa') precoIdeal *= 0.95;
-    if (numeroLinhas > 3) precoIdeal *= 1.05;
-    if (dados.projeto_piloto) precoIdeal *= 0.85;
-    
-    precoIdeal = Math.min(precoIdeal, precoMaximoEtico);
-    precoIdeal = Math.max(precoIdeal, custoTotalMinimo);
+    let precoFase1 = Math.round(precoProjeto * 0.3 / 1000) * 1000;
+    if (precoFase1 < 4000) precoFase1 = 4000;
+    if (precoFase1 > 12000) precoFase1 = 12000;
 
     // ========================================
-    // 🔥 VALIDAR ROI MÍNIMO E MÁXIMO DO CLIENTE
+    // INDICADORES DE RETORNO
     // ========================================
-    const ROI_MINIMO_CLIENTE = 0.25;  // 25% ao ano é o mínimo aceitável
-    const ROI_MAXIMO_CLIENTE = 1.00;  // 100% ao ano é o máximo aceitável
-    const PAYBACK_MAXIMO_MESES = 18;   // 18 meses é o máximo aceitável
-    
+    const roiCliente = ((ganhoAnualEstimado - precoProjeto) / precoProjeto) * 100;
+    const paybackMeses = precoProjeto / ganhoMensalEstimado;
+    const clienteFicaPercentual = ((ganhoAnualEstimado - precoProjeto) / ganhoAnualEstimado * 100);
+
+    // ========================================
+    // ALERTAS (APENAS INFORMATIVOS, NÃO MODIFICAM O PREÇO)
+    // ========================================
     let alertaROI = null;
     let alertaPayback = null;
     
-    const roiClienteCalculado = ((ganhoAnualEstimado - precoIdeal) / precoIdeal) * 100;
-    const paybackMesesCalculado = precoIdeal / ganhoMensalEstimado;
-    
-    // Validar ROI mínimo (cliente ganha pouco)
-    if (roiClienteCalculado < ROI_MINIMO_CLIENTE * 100) {
-      alertaROI = `⚠️ ROI do cliente (${roiClienteCalculado.toFixed(0)}%) está abaixo do mínimo recomendado (${ROI_MINIMO_CLIENTE * 100}%). Considere reduzir o preço.`;
-      // Ajusta o preço para garantir ROI mínimo
-      const precoAjustado = ganhoAnualEstimado / (1 + ROI_MINIMO_CLIENTE);
-      if (precoAjustado < precoIdeal) {
-        precoIdeal = Math.max(precoAjustado, custoTotalMinimo);
-      }
+    if (roiCliente < 25) {
+      alertaROI = `⚠️ ROI do cliente (${roiCliente.toFixed(0)}%) está abaixo do recomendado (25%). Considere reduzir o preço.`;
+    }
+    if (roiCliente > 100) {
+      alertaROI = `ℹ️ ROI do cliente (${roiCliente.toFixed(0)}%) está acima do esperado. Ótimo negócio para o cliente!`;
     }
     
-    // Validar ROI máximo (cliente ganha muito - preço muito baixo)
-    if (roiClienteCalculado > ROI_MAXIMO_CLIENTE * 100) {
-      // Ajusta o preço para cima para reduzir o ROI
-      const precoAjustadoMaximo = ganhoAnualEstimado / (1 + ROI_MAXIMO_CLIENTE);
-      if (precoAjustadoMaximo > precoIdeal) {
-        precoIdeal = Math.min(precoAjustadoMaximo, precoMaximoEtico);
-      }
+    if (paybackMeses > 12) {
+      alertaPayback = `⚠️ Payback do cliente (${paybackMeses.toFixed(1)} meses) excede o recomendado (12 meses).`;
     }
-    
-    if (paybackMesesCalculado > PAYBACK_MAXIMO_MESES) {
-      alertaPayback = `⚠️ Payback do cliente (${paybackMesesCalculado.toFixed(1)} meses) excede o máximo recomendado (${PAYBACK_MAXIMO_MESES} meses).`;
-    }
-
-    // ========================================
-    // FAIXA DE NEGOCIAÇÃO
-    // ========================================
-    let precoMinimo = Math.round(custoTotalMinimo / 1000) * 1000;
-    let precoIdealArredondado = Math.round(precoIdeal / 1000) * 1000;
-    let precoMaximo = Math.round(precoMaximoEtico / 1000) * 1000;
-
-    // Garantir que mínimo < ideal < máximo
-    if (precoMinimo >= precoIdealArredondado) {
-      precoMinimo = Math.round(precoIdealArredondado * 0.7);
-    }
-    if (precoMaximo <= precoIdealArredondado) {
-      precoMaximo = Math.round(precoIdealArredondado * 1.3);
-    }
-
-    // ========================================
-    // CÁLCULO DO PREÇO DA FASE 1 (DIAGNÓSTICO) - CORRIGIDO
-    // ========================================
-    // Diagnóstico = 30% do valor total do projeto (NÃO do faturamento!)
-    let precoFase1Arredondado = Math.round(precoIdealArredondado * 0.3);
-    
-    // Garantir limites mínimos e máximos
-    if (precoFase1Arredondado < 5000) precoFase1Arredondado = 5000;
-    if (precoFase1Arredondado > 15000) precoFase1Arredondado = 15000;
-
-    // ========================================
-    // INDICADORES DE RETORNO (RECALCULADOS)
-    // ========================================
-    const roiCliente = ((ganhoAnualEstimado - precoIdealArredondado) / precoIdealArredondado) * 100;
-    const paybackMeses = precoIdealArredondado / ganhoMensalEstimado;
-    const clienteFicaPercentual = ((ganhoAnualEstimado - precoIdealArredondado) / ganhoAnualEstimado * 100);
 
     // ========================================
     // GERAR AÇÕES SUGERIDAS
@@ -5068,7 +5017,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         titulo: "Redução de Setup e Microparadas",
         descricao: "Aplicar metodologia SMED e análise de perdas no chão de fábrica",
         ganho_mensal: Math.round(ganhoMensalEstimado * 0.40),
-        investimento: Math.round(precoIdealArredondado * 0.20),
+        investimento: Math.round(precoProjeto * 0.20),
         prioridade: "alta"
       });
     }
@@ -5078,7 +5027,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         titulo: "Controle Estatístico de Processo (SPC)",
         descricao: "Implementar controle de qualidade com gráficos de controle e Cpk",
         ganho_mensal: Math.round(ganhoMensalEstimado * 0.30),
-        investimento: Math.round(precoIdealArredondado * 0.15),
+        investimento: Math.round(precoProjeto * 0.15),
         prioridade: "alta"
       });
     }
@@ -5088,7 +5037,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         titulo: "Manutenção Autônoma e Preventiva",
         descricao: "Implementar TPM com foco em manutenção autônoma e planejada",
         ganho_mensal: Math.round(ganhoMensalEstimado * 0.25),
-        investimento: Math.round(precoIdealArredondado * 0.25),
+        investimento: Math.round(precoProjeto * 0.25),
         prioridade: "media"
       });
     }
@@ -5098,7 +5047,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         titulo: "Treinamento e Desenvolvimento de Equipes",
         descricao: "Capacitar equipe em ferramentas Lean e melhoria contínua",
         ganho_mensal: Math.round(ganhoMensalEstimado * 0.15),
-        investimento: Math.round(precoIdealArredondado * 0.10),
+        investimento: Math.round(precoProjeto * 0.10),
         prioridade: "media"
       });
     }
@@ -5108,7 +5057,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         titulo: "Diagnóstico Completo da Operação",
         descricao: "Mapeamento de fluxo de valor, cronoanálise e identificação de gargalos",
         ganho_mensal: Math.round(ganhoMensalEstimado * 0.50),
-        investimento: Math.round(precoIdealArredondado * 0.30),
+        investimento: Math.round(precoProjeto * 0.30),
         prioridade: "alta"
       });
     }
@@ -5136,29 +5085,28 @@ Data: ${new Date().toLocaleDateString('pt-BR')}
 
 💰 INVESTIMENTO SUGERIDO
 
-• Valor total: R$ ${precoIdealArredondado.toLocaleString('pt-BR')}
+• Valor total: R$ ${precoProjeto.toLocaleString('pt-BR')}
 • Forma de pagamento: 30% entrada, 40% na entrega do diagnóstico, 30% na conclusão
 
 Faixa de negociação:
 • Mínimo: R$ ${precoMinimo.toLocaleString('pt-BR')}
-• Ideal: R$ ${precoIdealArredondado.toLocaleString('pt-BR')}
+• Ideal: R$ ${precoProjeto.toLocaleString('pt-BR')}
 • Máximo: R$ ${precoMaximo.toLocaleString('pt-BR')}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📊 RETORNO PARA SUA EMPRESA
 
-• ROI no primeiro ano: ${roiCliente.toFixed(0)}%
+• ROI no primeiro ano: ${Math.round(roiCliente)}%
 • Payback: ${paybackMeses.toFixed(1)} meses
-• Sua empresa fica com ${clienteFicaPercentual.toFixed(0)}% do benefício gerado
+• Sua empresa fica com ${Math.round(clienteFicaPercentual)}% do benefício gerado
 `;
 
-    // Adicionar alertas se houver
     if (alertaROI) {
-      resumo += `\n⚠️ ${alertaROI}\n`;
+      resumo += `\n${alertaROI}\n`;
     }
     if (alertaPayback) {
-      resumo += `\n⚠️ ${alertaPayback}\n`;
+      resumo += `\n${alertaPayback}\n`;
     }
 
     resumo += `
@@ -5193,9 +5141,9 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
       
       precos: {
         minimo: precoMinimo,
-        ideal: precoIdealArredondado,
+        ideal: precoProjeto,
         maximo: precoMaximo,
-        fase1: precoFase1Arredondado
+        fase1: precoFase1
       },
       
       detalhamento: {
@@ -5204,11 +5152,9 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
         ganho_mensal_projetado: Math.round(ganhoMensalEstimado),
         ganho_anual_projetado: Math.round(ganhoAnualEstimado),
         potencial_melhoria_percentual: Math.round(potencialMelhoria * 100),
-        horas_estimadas: Math.round(totalHoras),
-        custo_projeto: Math.round(custoTotalMinimo),
-        roi_cliente_percentual: roiCliente.toFixed(0),
+        roi_cliente_percentual: Math.round(roiCliente),
         payback_meses: paybackMeses.toFixed(1),
-        cliente_fica_percentual: clienteFicaPercentual.toFixed(0)
+        cliente_fica_percentual: Math.round(clienteFicaPercentual)
       },
       
       acoes_sugeridas: acoesSugeridas,
@@ -5217,18 +5163,18 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
       
       dados_para_proposta: {
         empresa: dados.empresa_nome,
-        honorarios: precoIdealArredondado,
+        honorarios: precoProjeto,
         perda_mensal: Math.round(perdaMensalEstimada),
         ganho_mensal: Math.round(ganhoMensalEstimado),
-        roi: roiCliente.toFixed(0),
+        roi: Math.round(roiCliente),
         payback: paybackMeses.toFixed(1),
         setor: dados.setor,
         linhas: numeroLinhas
       },
       
       alertas: {
-        roi_baixo: alertaROI,
-        payback_alto: alertaPayback
+        roi_baixo: roiCliente < 25 ? "ROI abaixo do recomendado" : null,
+        payback_alto: paybackMeses > 12 ? "Payback acima do recomendado" : null
       }
     });
 
