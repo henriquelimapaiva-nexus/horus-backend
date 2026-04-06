@@ -4868,7 +4868,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       outros: { 
         perda_percentual: 0.07,      // CORRIGIDO: 18% → 20%
         oee_medio: 75, 
-        potencial_melhoria: 0.08,    // CORRIGIDO: 15% → 16%
+        potencial_melhoria: 0.12,    // CORRIGIDO: 15% → 16%
         horas_diagnostico_por_linha: 30,
         horas_implementacao_por_linha: 70
       }
@@ -4937,10 +4937,10 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     // CALCULAR CUSTO DO PROJETO
     // ========================================
-    const seuValorHora = 80;
+    const seuValorHora = 120;
     
-    let horasDiagnostico = 30 + (benchmark.horas_diagnostico_por_linha * numeroLinhas);
-    let horasImplementacao = 80 + (benchmark.horas_implementacao_por_linha * numeroLinhas);
+    let horasDiagnostico = 30 + (numeroLinhas * 8);
+    let horasImplementacao = 80 + (numeroLinhas * 15);
     let horasAcompanhamento = 20 + (numeroLinhas * 5);
     
     if (dados.gestor_dedicado === 'parcial') {
