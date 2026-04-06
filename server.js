@@ -4833,7 +4833,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       automotivo: { 
         perda_percentual: 0.06,
         oee_medio: 78, 
-        potencial_melhoria: 0.12,     // CORRIGIDO: 0.05 → 0.12 (12%)
+        potencial_melhoria: 0.12,
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 22000
@@ -4841,7 +4841,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       metalurgico: { 
         perda_percentual: 0.07,
         oee_medio: 72, 
-        potencial_melhoria: 0.12,     // CORRIGIDO: 0.05 → 0.12 (12%)
+        potencial_melhoria: 0.12,
         horas_diagnostico_por_linha: 28,
         horas_implementacao_por_linha: 65,
         preco_base: 20000
@@ -4849,7 +4849,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       alimenticio: { 
         perda_percentual: 0.05,
         oee_medio: 82, 
-        potencial_melhoria: 0.10,     // CORRIGIDO: 0.04 → 0.10 (10%)
+        potencial_melhoria: 0.10,
         horas_diagnostico_por_linha: 20,
         horas_implementacao_por_linha: 50,
         preco_base: 18000
@@ -4857,7 +4857,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       quimico: { 
         perda_percentual: 0.06,
         oee_medio: 80, 
-        potencial_melhoria: 0.11,     // CORRIGIDO: 0.05 → 0.11 (11%)
+        potencial_melhoria: 0.11,
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 20000
@@ -4865,7 +4865,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       farmaceutico: { 
         perda_percentual: 0.04,
         oee_medio: 85, 
-        potencial_melhoria: 0.08,     // CORRIGIDO: 0.03 → 0.08 (8%)
+        potencial_melhoria: 0.08,
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 18000
@@ -4873,7 +4873,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       outros: { 
         perda_percentual: 0.06,
         oee_medio: 75, 
-        potencial_melhoria: 0.12,     // CORRIGIDO: 0.05 → 0.12 (12%)
+        potencial_melhoria: 0.12,
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60,
         preco_base: 18000
@@ -4936,7 +4936,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     if (dados.complexidade === 'alta') fatorComplexidade += 0.05;
     if (dados.complexidade === 'baixa') fatorComplexidade -= 0.03;
     
-    // Limitar potencial de melhoria entre 5% e 15% (CORRIGIDO: antes era 3%-8%)
+    // Limitar potencial de melhoria entre 5% e 15%
     let potencialMelhoria = benchmark.potencial_melhoria * fatorComplexidade;
     potencialMelhoria = Math.min(0.15, Math.max(0.05, potencialMelhoria));
     
@@ -4993,92 +4993,13 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     let precoFase1 = Math.round(precoProjeto * 0.3 / 1000) * 1000;
     if (precoFase1 < 4000) precoFase1 = 4000;
-    if (precoFase1 > 15000) precoFase1 = 15000;  // CORRIGIDO: limite máximo aumentado para R$ 15.000
+    if (precoFase1 > 15000) precoFase1 = 15000;
 
     // ========================================
-    // INDICADORES DE RETORNO
-    // ========================================
-    const roiCliente = ((ganhoAnualEstimado - precoProjeto) / precoProjeto) * 100;
-    const paybackMeses = precoProjeto / ganhoMensalEstimado;
-    const clienteFicaPercentual = ((ganhoAnualEstimado - precoProjeto) / ganhoAnualEstimado * 100);
-
-    // ========================================
-    // ALERTAS (APENAS INFORMATIVOS, NÃO MODIFICAM O PREÇO)
-    // ========================================
-    let alertaROI = null;
-    let alertaPayback = null;
-    
-    if (roiCliente < 25) {
-      alertaROI = `⚠️ ROI do cliente (${roiCliente.toFixed(0)}%) está abaixo do recomendado (25%). Considere reduzir o preço.`;
-    }
-    if (roiCliente > 100) {
-      alertaROI = `ℹ️ ROI do cliente (${roiCliente.toFixed(0)}%) está acima do esperado. Ótimo negócio para o cliente!`;
-    }
-    
-    if (paybackMeses > 12) {
-      alertaPayback = `⚠️ Payback do cliente (${paybackMeses.toFixed(1)} meses) excede o recomendado (12 meses).`;
-    }
-
-    // ========================================
-    // GERAR AÇÕES SUGERIDAS
-    // ========================================
-    const acoesSugeridas = [];
-    
-    if (dados.problemas && dados.problemas.includes('produtividade')) {
-      acoesSugeridas.push({
-        titulo: "Redução de Setup e Microparadas",
-        descricao: "Aplicar metodologia SMED e análise de perdas no chão de fábrica",
-        ganho_mensal: Math.round(ganhoMensalEstimado * 0.40),
-        investimento: Math.round(precoProjeto * 0.20),
-        prioridade: "alta"
-      });
-    }
-    
-    if (dados.problemas && dados.problemas.includes('qualidade')) {
-      acoesSugeridas.push({
-        titulo: "Controle Estatístico de Processo (SPC)",
-        descricao: "Implementar controle de qualidade com gráficos de controle e Cpk",
-        ganho_mensal: Math.round(ganhoMensalEstimado * 0.30),
-        investimento: Math.round(precoProjeto * 0.15),
-        prioridade: "alta"
-      });
-    }
-    
-    if (dados.problemas && dados.problemas.includes('manutencao')) {
-      acoesSugeridas.push({
-        titulo: "Manutenção Autônoma e Preventiva",
-        descricao: "Implementar TPM com foco em manutenção autônoma e planejada",
-        ganho_mensal: Math.round(ganhoMensalEstimado * 0.25),
-        investimento: Math.round(precoProjeto * 0.25),
-        prioridade: "media"
-      });
-    }
-    
-    if (dados.problemas && dados.problemas.includes('rh')) {
-      acoesSugeridas.push({
-        titulo: "Treinamento e Desenvolvimento de Equipes",
-        descricao: "Capacitar equipe em ferramentas Lean e melhoria contínua",
-        ganho_mensal: Math.round(ganhoMensalEstimado * 0.15),
-        investimento: Math.round(precoProjeto * 0.10),
-        prioridade: "media"
-      });
-    }
-    
-    if (acoesSugeridas.length === 0) {
-      acoesSugeridas.push({
-        titulo: "Diagnóstico Completo da Operação",
-        descricao: "Mapeamento de fluxo de valor, cronoanálise e identificação de gargalos",
-        ganho_mensal: Math.round(ganhoMensalEstimado * 0.50),
-        investimento: Math.round(precoProjeto * 0.30),
-        prioridade: "alta"
-      });
-    }
-
-    // ========================================
-    // GERAR RESUMO PARA PROPOSTA
+    // GERAR RESUMO PARA PROPOSTA (SEM ESTIMATIVAS DE GANHO)
     // ========================================
     let resumo = `
-📊 ANÁLISE HÓRUS - PRECIFICAÇÃO PRÉ-CONTRATO
+📊 ANÁLISE HÓRUS - PROPOSTA PRÉ-DIAGNÓSTICO
 
 Empresa: ${dados.empresa_nome || "Cliente"}
 Setor: ${dados.setor}
@@ -5086,65 +5007,49 @@ Data: ${new Date().toLocaleDateString('pt-BR')}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📈 POTENCIAL IDENTIFICADO
+📋 ESCOPO DA FASE 1 (DIAGNÓSTICO)
 
-• Perda estimada atual: R$ ${Math.round(perdaMensalEstimada).toLocaleString('pt-BR')}/mês
-• Potencial de redução: ${Math.round(potencialMelhoria * 100)}%
-• Ganho mensal projetado: R$ ${Math.round(ganhoMensalEstimado).toLocaleString('pt-BR')}
-• Ganho anual projetado: R$ ${Math.round(ganhoAnualEstimado).toLocaleString('pt-BR')}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💰 INVESTIMENTO SUGERIDO
-
-• Valor total: R$ ${precoProjeto.toLocaleString('pt-BR')}
-• Forma de pagamento: 30% entrada, 40% na entrega do diagnóstico, 30% na conclusão
-
-Faixa de negociação:
-• Mínimo: R$ ${precoMinimo.toLocaleString('pt-BR')}
-• Ideal: R$ ${precoProjeto.toLocaleString('pt-BR')}
-• Máximo: R$ ${precoMaximo.toLocaleString('pt-BR')}
+• Mapeamento do fluxo de valor (VSM) das áreas produtivas
+• Coleta e análise de dados operacionais (tempos de ciclo, disponibilidade, qualidade)
+• Identificação de gargalos e oportunidades de melhoria
+• Elaboração e entrega de relatório técnico contendo diagnóstico e recomendações
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📊 RETORNO PARA SUA EMPRESA
+💰 INVESTIMENTO - FASE 1
 
-• ROI no primeiro ano: ${Math.round(roiCliente)}%
-• Payback: ${paybackMeses.toFixed(1)} meses
-• Sua empresa fica com ${Math.round(clienteFicaPercentual)}% do benefício gerado
-`;
-
-    if (alertaROI) {
-      resumo += `\n${alertaROI}\n`;
-    }
-    if (alertaPayback) {
-      resumo += `\n${alertaPayback}\n`;
-    }
-
-    resumo += `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-⚙️ AÇÕES PRIORITÁRIAS SUGERIDAS
-
-${acoesSugeridas.map((a, i) => `${i+1}. ${a.titulo}
-   • Ganho estimado: R$ ${a.ganho_mensal.toLocaleString('pt-BR')}/mês
-   • Investimento sugerido: R$ ${a.investimento.toLocaleString('pt-BR')}
-   • Prioridade: ${a.prioridade.toUpperCase()}`).join('\n\n')}
+• Valor total: R$ ${precoFase1.toLocaleString('pt-BR')}
+• Forma de pagamento: 100% na assinatura (ou conforme negociado)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🎯 PRÓXIMOS PASSOS
+📌 PRÓXIMOS PASSOS
 
-1. Agendar reunião de alinhamento
-2. Assinar contrato e dar início ao diagnóstico
-3. Coletar dados reais com a plataforma Hórus
-4. Implementar melhorias e acompanhar resultados
+1. Assinar contrato e iniciar diagnóstico
+2. Coletar dados reais com a plataforma Hórus
+3. Receber relatório técnico com diagnóstico e oportunidades identificadas
+4. Após o diagnóstico, apresentaremos proposta para a Fase 2 (Implementação) e Fase 3 (Acompanhamento), com preços baseados nos dados reais coletados
 
-Esta é uma proposta justa e alinhada ao valor que entregaremos.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ IMPORTANTE
+
+• Este contrato cobre exclusivamente a Fase 1 (Diagnóstico)
+• As estimativas de ganho e ROI serão fornecidas APÓS a coleta de dados reais
+• A CONTRATADA não garante percentuais específicos de melhoria antes do diagnóstico
+• Os resultados dependem da implementação das recomendações pela CONTRATANTE
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Esta proposta é válida por 15 dias.
+
+Atenciosamente,
+
+Nexus Engenharia Aplicada
     `;
 
     // ========================================
-    // RETORNAR RESULTADO
+    // RETORNAR RESULTADO (SEM ESTIMATIVAS DE GANHO)
     // ========================================
     res.status(200).json({
       status: "sucesso",
@@ -5158,35 +5063,14 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
         fase1: precoFase1
       },
       
-      detalhamento: {
-        perda_mensal_estimada: Math.round(perdaMensalEstimada),
-        perda_anual_estimada: Math.round(perdaAnualEstimada),
-        ganho_mensal_projetado: Math.round(ganhoMensalEstimado),
-        ganho_anual_projetado: Math.round(ganhoAnualEstimado),
-        potencial_melhoria_percentual: Math.round(potencialMelhoria * 100),
-        roi_cliente_percentual: Math.round(roiCliente),
-        payback_meses: paybackMeses.toFixed(1),
-        cliente_fica_percentual: Math.round(clienteFicaPercentual)
-      },
-      
-      acoes_sugeridas: acoesSugeridas,
-      
       resumo: resumo,
       
       dados_para_proposta: {
         empresa: dados.empresa_nome,
         honorarios: precoProjeto,
-        perda_mensal: Math.round(perdaMensalEstimada),
-        ganho_mensal: Math.round(ganhoMensalEstimado),
-        roi: Math.round(roiCliente),
-        payback: paybackMeses.toFixed(1),
+        fase1: precoFase1,
         setor: dados.setor,
         linhas: numeroLinhas
-      },
-      
-      alertas: {
-        roi_baixo: roiCliente < 25 ? "ROI abaixo do recomendado" : null,
-        payback_alto: paybackMeses > 12 ? "Payback acima do recomendado" : null
       }
     });
 
