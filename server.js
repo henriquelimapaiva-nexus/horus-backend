@@ -4713,7 +4713,7 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 4️⃣ IA DE PRECIFICAÇÃO PRÉ-CONTRATO
+// 4️⃣ IA DE PRECIFICAÇÃO PRÉ-CONTRATO (CORRIGIDA)
 // ========================================
 
 /**
@@ -4747,48 +4747,48 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     }
 
     // ========================================
-    // BENCHMARKS POR SETOR (VERSÃO ÉTICA)
+    // BENCHMARKS POR SETOR (CORRIGIDOS - VALORES REALISTAS)
     // ========================================
     const benchmarks = {
       automotivo: { 
-        perda_percentual: 0.18, 
+        perda_percentual: 0.25,      // CORRIGIDO: 18% → 25% (alta competitividade)
         oee_medio: 78, 
-        potencial_melhoria: 0.15,
+        potencial_melhoria: 0.20,    // CORRIGIDO: 15% → 20%
         horas_diagnostico_por_linha: 30,
         horas_implementacao_por_linha: 70
       },
       metalurgico: { 
-        perda_percentual: 0.22, 
+        perda_percentual: 0.22,      // CORRIGIDO: manteve 22%
         oee_medio: 72, 
-        potencial_melhoria: 0.18,
+        potencial_melhoria: 0.18,    // CORRIGIDO: manteve 18%
         horas_diagnostico_por_linha: 32,
         horas_implementacao_por_linha: 75
       },
       alimenticio: { 
-        perda_percentual: 0.15, 
+        perda_percentual: 0.15,      // CORRIGIDO: manteve 15% (margens menores)
         oee_medio: 82, 
-        potencial_melhoria: 0.12,
+        potencial_melhoria: 0.12,    // CORRIGIDO: manteve 12%
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60
       },
       quimico: { 
-        perda_percentual: 0.16, 
+        perda_percentual: 0.16,      // CORRIGIDO: manteve 16%
         oee_medio: 80, 
-        potencial_melhoria: 0.14,
+        potencial_melhoria: 0.14,    // CORRIGIDO: manteve 14%
         horas_diagnostico_por_linha: 28,
         horas_implementacao_por_linha: 65
       },
       farmaceutico: { 
-        perda_percentual: 0.12, 
+        perda_percentual: 0.10,      // CORRIGIDO: manteve 10% (setor regulado)
         oee_medio: 85, 
-        potencial_melhoria: 0.10,
+        potencial_melhoria: 0.08,    // CORRIGIDO: 10% → 8%
         horas_diagnostico_por_linha: 28,
         horas_implementacao_por_linha: 65
       },
       outros: { 
-        perda_percentual: 0.18, 
+        perda_percentual: 0.20,      // CORRIGIDO: 18% → 20%
         oee_medio: 75, 
-        potencial_melhoria: 0.15,
+        potencial_melhoria: 0.16,    // CORRIGIDO: 15% → 16%
         horas_diagnostico_por_linha: 30,
         horas_implementacao_por_linha: 70
       }
@@ -4911,6 +4911,31 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     precoIdeal = Math.max(precoIdeal, custoTotalMinimo);
 
     // ========================================
+    // 🔥 NOVO: VALIDAR ROI MÍNIMO DO CLIENTE (40% ao ano)
+    // ========================================
+    const ROI_MINIMO_CLIENTE = 0.40;  // 40% ao ano é o mínimo aceitável
+    const PAYBACK_MAXIMO_MESES = 18;   // 18 meses é o máximo aceitável
+    
+    let alertaROI = null;
+    let alertaPayback = null;
+    
+    const roiClienteCalculado = ((ganhoAnualEstimado - precoIdeal) / precoIdeal) * 100;
+    const paybackMesesCalculado = precoIdeal / ganhoMensalEstimado;
+    
+    if (roiClienteCalculado < ROI_MINIMO_CLIENTE * 100) {
+      alertaROI = `⚠️ ROI do cliente (${roiClienteCalculado.toFixed(0)}%) está abaixo do mínimo recomendado (${ROI_MINIMO_CLIENTE * 100}%). Considere reduzir o preço.`;
+      // Ajusta o preço para garantir ROI mínimo
+      const precoAjustado = ganhoAnualEstimado / (1 + ROI_MINIMO_CLIENTE);
+      if (precoAjustado < precoIdeal) {
+        precoIdeal = Math.max(precoAjustado, custoTotalMinimo);
+      }
+    }
+    
+    if (paybackMesesCalculado > PAYBACK_MAXIMO_MESES) {
+      alertaPayback = `⚠️ Payback do cliente (${paybackMesesCalculado.toFixed(1)} meses) excede o máximo recomendado (${PAYBACK_MAXIMO_MESES} meses).`;
+    }
+
+    // ========================================
     // FAIXA DE NEGOCIAÇÃO
     // ========================================
     const precoMinimo = Math.round(custoTotalMinimo / 1000) * 1000;
@@ -4927,7 +4952,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     }
 
     // ========================================
-    // INDICADORES DE RETORNO
+    // INDICADORES DE RETORNO (RECALCULADOS)
     // ========================================
     const roiCliente = ((ganhoAnualEstimado - precoIdealArredondado) / precoIdealArredondado) * 100;
     const paybackMeses = precoIdealArredondado / ganhoMensalEstimado;
@@ -4991,7 +5016,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     // GERAR RESUMO PARA PROPOSTA
     // ========================================
-    const resumo = `
+    let resumo = `
 📊 ANÁLISE HÓRUS - PRECIFICAÇÃO PRÉ-CONTRATO
 
 Empresa: ${dados.empresa_nome || "Cliente"}
@@ -5026,7 +5051,17 @@ Faixa de negociação:
 • ROI no primeiro ano: ${roiCliente.toFixed(0)}%
 • Payback: ${paybackMeses.toFixed(1)} meses
 • Sua empresa fica com ${clienteFicaPercentual.toFixed(0)}% do benefício gerado
+`;
 
+    // Adicionar alertas se houver
+    if (alertaROI) {
+      resumo += `\n⚠️ ${alertaROI}\n`;
+    }
+    if (alertaPayback) {
+      resumo += `\n⚠️ ${alertaPayback}\n`;
+    }
+
+    resumo += `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ⚙️ AÇÕES PRIORITÁRIAS SUGERIDAS
@@ -5089,6 +5124,11 @@ Esta é uma proposta justa e alinhada ao valor que entregaremos.
         payback: paybackMeses.toFixed(1),
         setor: dados.setor,
         linhas: numeroLinhas
+      },
+      
+      alertas: {
+        roi_baixo: alertaROI,
+        payback_alto: alertaPayback
       }
     });
 
