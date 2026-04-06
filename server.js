@@ -1684,12 +1684,12 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
   try {
     const { linhaId } = req.params;
 
-    // Buscar dados da linha e postos
+    // 1. Buscar dados da linha e postos
     const result = await pool.query(`
       SELECT 
         lp.takt_time_segundos,
         lp.meta_diaria,
-        pt.tempo_ciclo_segundos,  /* ✅ CORRIGIDO: era 'tempo_cycle_segundos' */
+        pt.tempo_ciclo_segundos,
         COALESCE(pt.disponibilidade_percentual, 100) as disponibilidade
       FROM linhas_producao lp
       LEFT JOIN posto_trabalho pt ON pt.linha_id = lp.id
@@ -1730,21 +1730,68 @@ app.get("/api/global-efficiency/:linhaId", autenticarToken, async (req, res) => 
       });
     }
 
-    // Cálculos finais
+    // 2. 🔥 BUSCAR DADOS DE QUALIDADE (REFUGO)
+    const qualidadeQuery = `
+      SELECT 
+        COALESCE(SUM(pl.refugo_pecas), 0) as total_refugo,
+        COALESCE(SUM(pl.retrabalho_pecas), 0) as total_retrabalho
+      FROM perdas_linha pl
+      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+      WHERE lp.linha_id = $1
+    `;
+    const qualidadeRes = await pool.query(qualidadeQuery, [linhaId]);
+    const totalRefugo = parseInt(qualidadeRes.rows[0]?.total_refugo) || 0;
+    const totalRetrabalho = parseInt(qualidadeRes.rows[0]?.total_retrabalho) || 0;
+
+    // 3. 🔥 CÁLCULO DOS PILARES OEE
+    // Disponibilidade (tempo disponível vs tempo planejado)
+    const disponibilidade = 0.90; // Placeholder - ideal seria buscar tempo real
+    
+    // Performance (ritmo teórico vs ritmo real)
+    const performance = Math.min(1, taktAlvo / ritmoGargalo);
+    
+    // Qualidade (peças boas vs peças totais)
+    const pecasBoas = metaDiaria - totalRefugo - totalRetrabalho;
+    const qualidade = metaDiaria > 0 ? Math.max(0, pecasBoas / metaDiaria) : 0;
+
+    // OEE Final = Disponibilidade × Performance × Qualidade
+    const oeeCalculado = disponibilidade * performance * qualidade;
+
+    // 4. CAPACIDADE REAL (considerando qualidade)
     const capacidadeReal = Math.floor((metaDiaria * taktAlvo) / ritmoGargalo);
-    const eficienciaGlobal = ((capacidadeReal / metaDiaria) * 100).toFixed(2);
+    const producaoRealComQualidade = Math.floor(capacidadeReal * qualidade);
+
+    // 5. 🔥 NOVO: Cálculo dos 3 pilares
+    const pilares = {
+      disponibilidade_percentual: (disponibilidade * 100).toFixed(2),
+      performance_percentual: (performance * 100).toFixed(2),
+      qualidade_percentual: (qualidade * 100).toFixed(2),
+      oee_percentual: (oeeCalculado * 100).toFixed(2)
+    };
 
     res.status(200).json({
-      oee: parseFloat(eficienciaGlobal),
-      eficiencia_global: eficienciaGlobal + "%",
-      capacidade_estimada: capacidadeReal,
+      oee: parseFloat(pilares.oee_percentual),
+      eficiencia_global: pilares.oee_percentual + "%",
+      capacidade_estimada: producaoRealComQualidade,
       gargalo_identificado: ritmoGargalo,
       takt_time: taktAlvo,
       meta_diaria: metaDiaria,
+      // 🔥 NOVO: 3 pilares do OEE
+      pilares: {
+        disponibilidade: parseFloat(pilares.disponibilidade_percentual),
+        performance: parseFloat(pilares.performance_percentual),
+        qualidade: parseFloat(pilares.qualidade_percentual)
+      },
+      perdas_qualidade: {
+        refugo: totalRefugo,
+        retrabalho: totalRetrabalho,
+        total_perdas_pecas: totalRefugo + totalRetrabalho
+      },
       detalhes: {
         ritmo_gargalo: ritmoGargalo,
         takt_alvo: taktAlvo,
-        capacidade_real: capacidadeReal,
+        capacidade_teorica: capacidadeReal,
+        producao_real_estimada: producaoRealComQualidade,
         meta_diaria: metaDiaria,
         total_postos: totalPostos
       }
