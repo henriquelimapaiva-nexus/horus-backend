@@ -4831,44 +4831,44 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     const benchmarks = {
       automotivo: { 
-        perda_percentual: 0.25,      // CORRIGIDO: 18% → 25% (alta competitividade)
+        perda_percentual: 0.08,      // CORRIGIDO: 18% → 25% (alta competitividade)
         oee_medio: 78, 
-        potencial_melhoria: 0.20,    // CORRIGIDO: 15% → 20%
+        potencial_melhoria: 0.10,    // CORRIGIDO: 15% → 20%
         horas_diagnostico_por_linha: 30,
         horas_implementacao_por_linha: 70
       },
       metalurgico: { 
-        perda_percentual: 0.22,      // CORRIGIDO: manteve 22%
+        perda_percentual: 0.07,      // CORRIGIDO: manteve 22%
         oee_medio: 72, 
-        potencial_melhoria: 0.18,    // CORRIGIDO: manteve 18%
+        potencial_melhoria: 0.09,    // CORRIGIDO: manteve 18%
         horas_diagnostico_por_linha: 32,
         horas_implementacao_por_linha: 75
       },
       alimenticio: { 
-        perda_percentual: 0.15,      // CORRIGIDO: manteve 15% (margens menores)
+        perda_percentual: 0.05,      // CORRIGIDO: manteve 15% (margens menores)
         oee_medio: 82, 
-        potencial_melhoria: 0.12,    // CORRIGIDO: manteve 12%
+        potencial_melhoria: 0.07,    // CORRIGIDO: manteve 12%
         horas_diagnostico_por_linha: 25,
         horas_implementacao_por_linha: 60
       },
       quimico: { 
-        perda_percentual: 0.16,      // CORRIGIDO: manteve 16%
+        perda_percentual: 0.06,      // CORRIGIDO: manteve 16%
         oee_medio: 80, 
-        potencial_melhoria: 0.14,    // CORRIGIDO: manteve 14%
+        potencial_melhoria: 0.08,    // CORRIGIDO: manteve 14%
         horas_diagnostico_por_linha: 28,
         horas_implementacao_por_linha: 65
       },
       farmaceutico: { 
-        perda_percentual: 0.10,      // CORRIGIDO: manteve 10% (setor regulado)
+        perda_percentual: 0.04,      // CORRIGIDO: manteve 10% (setor regulado)
         oee_medio: 85, 
-        potencial_melhoria: 0.08,    // CORRIGIDO: 10% → 8%
+        potencial_melhoria: 0.05,    // CORRIGIDO: 10% → 8%
         horas_diagnostico_por_linha: 28,
         horas_implementacao_por_linha: 65
       },
       outros: { 
-        perda_percentual: 0.20,      // CORRIGIDO: 18% → 20%
+        perda_percentual: 0.07,      // CORRIGIDO: 18% → 20%
         oee_medio: 75, 
-        potencial_melhoria: 0.16,    // CORRIGIDO: 15% → 16%
+        potencial_melhoria: 0.08,    // CORRIGIDO: 15% → 16%
         horas_diagnostico_por_linha: 30,
         horas_implementacao_por_linha: 70
       }
