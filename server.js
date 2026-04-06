@@ -8292,11 +8292,25 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       const minutosTotais = diasMes * horasDia * 60;
       const custoMinuto = custoLinha / minutosTotais;
 
-      // 7.4 CALCULAR PERDA DE SETUP
+      // 7.4 CALCULAR PERDA DE SETUP (CORRIGIDO - baseado em trocas de produto)
       let perdasSetup = 0;
+      
+      // Buscar produtos da linha primeiro para saber quantos produtos
+      const produtosQuerySetup = `
+        SELECT COUNT(*) as total_produtos
+        FROM linha_produto
+        WHERE linha_id = $1
+      `;
+      const produtosCountRes = await pool.query(produtosQuerySetup, [linha.id]);
+      const quantidadeProdutos = parseInt(produtosCountRes.rows[0]?.total_produtos) || 1;
+      
+      // Número estimado de trocas por mês
+      const trocasPorMes = quantidadeProdutos > 1 ? quantidadeProdutos : 1;
+      
       for (const posto of postos) {
         const tempoSetup = parseFloat(posto.tempo_setup_minutos) || 0;
-        perdasSetup += tempoSetup * custoMinuto * diasMes;
+        // Setup mensal = tempo de setup × custo/minuto × número de trocas
+        perdasSetup += tempoSetup * custoMinuto * trocasPorMes;
       }
 
       // 7.5 PRODUTOS DA LINHA
