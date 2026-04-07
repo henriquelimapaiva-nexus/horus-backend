@@ -8764,9 +8764,19 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       return { delta: parseFloat(delta.toFixed(2)), percentual: parseFloat(percentual.toFixed(2)) };
     };
 
+        // ========================================
+    // 9. MONTAR RESPOSTA (COM DATAS FORMATADAS)
     // ========================================
-    // 9. MONTAR RESPOSTA
-    // ========================================
+    
+    // Função para formatar data no padrão brasileiro (dd/mm/aaaa)
+    const formatarDataBR = (data) => {
+      if (!data) return "";
+      const d = new Date(data);
+      const dia = d.getDate().toString().padStart(2, '0');
+      const mes = (d.getMonth() + 1).toString().padStart(2, '0');
+      const ano = d.getFullYear();
+      return `${dia}/${mes}/${ano}`;
+    };
     
     const antes = {
       oee: parseFloat(oeeAntes.rows[0]?.oee || 0),
@@ -8797,17 +8807,17 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       empresa_id: parseInt(empresaId),
       periodo: {
         antes: {
-          inicio: periodoAntes.inicio.toISOString().split('T')[0],
-          fim: periodoAntes.fim.toISOString().split('T')[0],
+          inicio: formatarDataBR(periodoAntes.inicio),
+          fim: formatarDataBR(periodoAntes.fim),
           meses_analisados: antes_inicio ? null : parseInt(meses_antes)
         },
         depois: {
-          inicio: periodoDepois.inicio.toISOString().split('T')[0],
-          fim: periodoDepois.fim.toISOString().split('T')[0],
+          inicio: formatarDataBR(periodoDepois.inicio),
+          fim: formatarDataBR(periodoDepois.fim),
           meses_analisados: depois_inicio ? null : parseInt(meses_depois)
         },
-        data_diagnostico: dataDiagnostico.toISOString().split('T')[0],
-        data_implementacao: dataImplementacao.toISOString().split('T')[0]
+        data_diagnostico: formatarDataBR(dataDiagnostico),
+        data_implementacao: formatarDataBR(dataImplementacao)
       },
       indicadores: {
         oee: { antes: antes.oee, depois: depois.oee, ...calcularDelta(antes.oee, depois.oee) },
