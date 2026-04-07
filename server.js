@@ -8484,28 +8484,102 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
 });
 
 // ========================================
-// 📊 VALIDAÇÃO DE RESULTADOS - COMPARAÇÃO ANTES x DEPOIS
+// 📊 VALIDAÇÃO DE RESULTADOS - VERSÃO PROFISSIONAL (REFATORADA)
 // ========================================
 
 /**
- * ROTA: COMPARAR PERÍODOS ANTES E DEPOIS DA CONSULTORIA
- * 
- * Retorna indicadores reais baseados exclusivamente em dados do banco:
- * - OEE, Disponibilidade, Performance, Qualidade (da tabela producao_oee)
- * - Setup (da tabela posto_trabalho)
- * - Refugo, Microparadas (da tabela perdas_linha)
- * - Produtividade (da tabela producao_oee)
- * - Impacto financeiro (calculado a partir das perdas reais)
- * 
- * Nada é inventado. Tudo vem do banco de dados.
- * 
- * Parâmetros de query:
- * - meses_antes: número de meses para o período antes (padrão 3)
- * - meses_depois: número de meses para o período depois (padrão 3)
- * - antes_inicio: data personalizada para início do período antes (YYYY-MM-DD)
- * - antes_fim: data personalizada para fim do período antes (YYYY-MM-DD)
- * - depois_inicio: data personalizada para início do período depois (YYYY-MM-DD)
- * - depois_fim: data personalizada para fim do período depois (YYYY-MM-DD)
+ * CLASSE: CALCULADORA FINANCEIRA
+ * Separa a lógica de cálculo da lógica de rota
+ */
+class CalculadoraFinanceira {
+  constructor(config) {
+    this.custoHoraMaquina = config.custoHoraMaquina || 80;
+    this.valorRefugoMedio = config.valorRefugoMedio || 50;
+    this.numTrocasDiarias = config.numTrocasDiarias || 2;
+    this.diasProdutivosMes = config.diasProdutivosMes || 22;
+    this.investimentoTotal = config.investimentoTotal || 50000;
+  }
+
+  /**
+   * Calcula perda financeira por refugo
+   */
+  calcularPerdaRefugo(refugoDiario) {
+    return refugoDiario * this.valorRefugoMedio * this.diasProdutivosMes;
+  }
+
+  /**
+   * Calcula perda financeira por microparadas
+   */
+  calcularPerdaMicroparadas(microparadasDiariasMinutos) {
+    const horasParadasMes = (microparadasDiariasMinutos / 60) * this.diasProdutivosMes;
+    return horasParadasMes * this.custoHoraMaquina;
+  }
+
+  /**
+   * Calcula perda financeira por setup
+   */
+  calcularPerdaSetup(setupMinutos) {
+    const horasSetupDia = (setupMinutos / 60) * this.numTrocasDiarias;
+    const horasSetupMes = horasSetupDia * this.diasProdutivosMes;
+    return horasSetupMes * this.custoHoraMaquina;
+  }
+
+  /**
+   * Calcula todos os indicadores financeiros
+   */
+  calcularFinanceiro(dadosAntes, dadosDepois) {
+    const perdaRefugoAntes = this.calcularPerdaRefugo(dadosAntes.refugoDiario);
+    const perdaRefugoDepois = this.calcularPerdaRefugo(dadosDepois.refugoDiario);
+    
+    const perdaMicroAntes = this.calcularPerdaMicroparadas(dadosAntes.microparadasDiarias);
+    const perdaMicroDepois = this.calcularPerdaMicroparadas(dadosDepois.microparadasDiarias);
+    
+    const perdaSetupAntes = this.calcularPerdaSetup(dadosAntes.setupMedio);
+    const perdaSetupDepois = this.calcularPerdaSetup(dadosDepois.setupMedio);
+    
+    const perdaTotalAntes = perdaRefugoAntes + perdaMicroAntes + perdaSetupAntes;
+    const perdaTotalDepois = perdaRefugoDepois + perdaMicroDepois + perdaSetupDepois;
+    
+    const economiaMensal = perdaTotalAntes - perdaTotalDepois;
+    const economiaAnual = economiaMensal * 12;
+    
+    const roi = economiaAnual > 0 ? (economiaAnual / this.investimentoTotal) * 100 : 0;
+    const paybackMeses = economiaMensal > 0 ? this.investimentoTotal / economiaMensal : 0;
+    
+    return {
+      perdas: {
+        refugo: { antes: perdaRefugoAntes, depois: perdaRefugoDepois, delta: perdaRefugoAntes - perdaRefugoDepois },
+        microparadas: { antes: perdaMicroAntes, depois: perdaMicroDepois, delta: perdaMicroAntes - perdaMicroDepois },
+        setup: { antes: perdaSetupAntes, depois: perdaSetupDepois, delta: perdaSetupAntes - perdaSetupDepois },
+        total: { antes: perdaTotalAntes, depois: perdaTotalDepois, delta: perdaTotalAntes - perdaTotalDepois }
+      },
+      economia: {
+        mensal: economiaMensal,
+        anual: economiaAnual
+      },
+      roi: {
+        percentual: roi,
+        paybackMeses: paybackMeses
+      }
+    };
+  }
+
+  /**
+   * Calcula delta percentual entre dois valores
+   */
+  static calcularDelta(antes, depois) {
+    const delta = depois - antes;
+    const percentual = antes !== 0 ? (delta / Math.abs(antes)) * 100 : 0;
+    return {
+      valor: parseFloat(delta.toFixed(2)),
+      percentual: parseFloat(percentual.toFixed(2)),
+      isMelhoria: (delta > 0 && antes <= depois) || (delta < 0 && antes > depois) // depende do contexto
+    };
+  }
+}
+
+/**
+ * ROTA: COMPARAR PERÍODOS ANTES E DEPOIS (VERSÃO PROFISSIONAL)
  */
 app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) => {
   const { empresaId } = req.params;
@@ -8518,49 +8592,68 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     depois_fim
   } = req.query;
 
+  const client = await pool.connect();
+  
   try {
+    // ========================================
+    // 1. BUSCAR CONFIGURAÇÕES DA EMPRESA
+    // ========================================
+    const configRes = await client.query(`
+      SELECT 
+        id, nome,
+        COALESCE(custo_hora_maquina_bruto, 80) as custo_hora_maquina,
+        COALESCE(valor_unitario_refugo_medio, 50) as valor_refugo,
+        COALESCE(num_trocas_diarias_media, 2) as num_trocas,
+        COALESCE(dias_produtivos_mes, 22) as dias_produtivos,
+        COALESCE(valor_contrato, 50000) as investimento_total
+      FROM empresas 
+      WHERE id = $1
+    `, [empresaId]);
+
+    if (configRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+
+    const empresa = configRes.rows[0];
+    
+    // Instanciar calculadora com configurações reais da empresa
+    const calculadora = new CalculadoraFinanceira({
+      custoHoraMaquina: parseFloat(empresa.custo_hora_maquina),
+      valorRefugoMedio: parseFloat(empresa.valor_refugo),
+      numTrocasDiarias: parseInt(empresa.num_trocas),
+      diasProdutivosMes: parseInt(empresa.dias_produtivos),
+      investimentoTotal: parseFloat(empresa.investimento_total)
+    });
+
+    // ========================================
+    // 2. DEFINIR PERÍODOS DE ANÁLISE
+    // ========================================
     let periodoAntes, periodoDepois;
     let dataDiagnostico, dataImplementacao;
 
-    // ========================================
-    // 1. DEFINIR PERÍODOS (MANUAL OU AUTOMÁTICO)
-    // ========================================
-    
     if (antes_inicio && antes_fim && depois_inicio && depois_fim) {
-      // Usar datas fornecidas manualmente pelo usuário
-      periodoAntes = {
-        inicio: new Date(antes_inicio),
-        fim: new Date(antes_fim)
-      };
-      periodoDepois = {
-        inicio: new Date(depois_inicio),
-        fim: new Date(depois_fim)
-      };
-      
-      // Datas estimadas para exibição
+      // Datas personalizadas
+      periodoAntes = { inicio: new Date(antes_inicio), fim: new Date(antes_fim) };
+      periodoDepois = { inicio: new Date(depois_inicio), fim: new Date(depois_fim) };
       dataDiagnostico = new Date(periodoAntes.fim);
       dataDiagnostico.setDate(dataDiagnostico.getDate() + 1);
       dataImplementacao = new Date(periodoDepois.inicio);
       dataImplementacao.setDate(dataImplementacao.getDate() - 1);
       
-      // Garantir que as datas são válidas
       if (isNaN(periodoAntes.inicio.getTime()) || isNaN(periodoAntes.fim.getTime()) ||
           isNaN(periodoDepois.inicio.getTime()) || isNaN(periodoDepois.fim.getTime())) {
-        return res.status(400).json({ 
-          erro: "Datas inválidas. Use o formato YYYY-MM-DD."
-        });
+        return res.status(400).json({ erro: "Datas inválidas. Use o formato YYYY-MM-DD." });
       }
     } else {
-      // Buscar a primeira data de produção registrada (início da operação)
-      const primeiraProducao = await pool.query(`
+      // Períodos automáticos baseados nos dados disponíveis
+      const primeiraProducao = await client.query(`
         SELECT MIN(data) as primeira_data
         FROM producao_oee po
         JOIN linhas_producao l ON l.id = po.linha_id
         WHERE l.empresa_id = $1
       `, [empresaId]);
 
-      // Buscar a última data de produção registrada
-      const ultimaProducao = await pool.query(`
+      const ultimaProducao = await client.query(`
         SELECT MAX(data) as ultima_data
         FROM producao_oee po
         JOIN linhas_producao l ON l.id = po.linha_id
@@ -8569,7 +8662,7 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
 
       if (!primeiraProducao.rows[0]?.primeira_data) {
         return res.status(404).json({ 
-          erro: "Nenhum dado de produção encontrado para esta empresa.",
+          erro: "Nenhum dado de produção encontrado",
           mensagem: "Registre produções na tabela producao_oee para gerar a validação."
         });
       }
@@ -8577,28 +8670,21 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       const primeiraData = new Date(primeiraProducao.rows[0].primeira_data);
       const ultimaData = new Date(ultimaProducao.rows[0].ultima_data);
       
-      // Data do diagnóstico = primeira data de produção + 30 dias (estimativa)
       dataDiagnostico = new Date(primeiraData);
       dataDiagnostico.setDate(dataDiagnostico.getDate() + 30);
-      
-      // Data da implementação = data do diagnóstico + 60 dias
       dataImplementacao = new Date(dataDiagnostico);
       dataImplementacao.setDate(dataImplementacao.getDate() + 60);
 
-      // Definir períodos de análise
       const fimPeriodoAntes = new Date(dataDiagnostico);
       fimPeriodoAntes.setDate(fimPeriodoAntes.getDate() - 1);
-      
       const inicioPeriodoAntes = new Date(fimPeriodoAntes);
       inicioPeriodoAntes.setMonth(inicioPeriodoAntes.getMonth() - parseInt(meses_antes));
       
       const inicioPeriodoDepois = new Date(dataImplementacao);
       inicioPeriodoDepois.setDate(inicioPeriodoDepois.getDate() + 1);
-      
       const fimPeriodoDepois = new Date(inicioPeriodoDepois);
       fimPeriodoDepois.setMonth(fimPeriodoDepois.getMonth() + parseInt(meses_depois));
       
-      // Ajustar para não ultrapassar os dados disponíveis
       const ajustarPeriodo = (inicio, fim, dataMin, dataMax) => {
         if (inicio < dataMin) inicio = dataMin;
         if (fim > dataMax) fim = dataMax;
@@ -8610,80 +8696,98 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     }
 
     // ========================================
-    // 2. BUSCAR DADOS REAIS DE PRODUÇÃO (OEE)
+    // 3. BUSCAR DADOS DE PRODUÇÃO (OEE)
     // ========================================
+    const [oeeAntes, oeeDepois] = await Promise.all([
+      client.query(`
+        SELECT 
+          COALESCE(AVG(oee), 0) as oee,
+          COALESCE(AVG(disponibilidade), 0) as disponibilidade,
+          COALESCE(AVG(performance), 0) as performance,
+          COALESCE(AVG(qualidade), 0) as qualidade,
+          COALESCE(AVG(pecas_produzidas), 0) as produtividade,
+          COUNT(*) as total_registros
+        FROM producao_oee po
+        JOIN linhas_producao l ON l.id = po.linha_id
+        WHERE l.empresa_id = $1 AND po.data BETWEEN $2 AND $3
+      `, [empresaId, periodoAntes.inicio, periodoAntes.fim]),
+      client.query(`
+        SELECT 
+          COALESCE(AVG(oee), 0) as oee,
+          COALESCE(AVG(disponibilidade), 0) as disponibilidade,
+          COALESCE(AVG(performance), 0) as performance,
+          COALESCE(AVG(qualidade), 0) as qualidade,
+          COALESCE(AVG(pecas_produzidas), 0) as produtividade,
+          COUNT(*) as total_registros
+        FROM producao_oee po
+        JOIN linhas_producao l ON l.id = po.linha_id
+        WHERE l.empresa_id = $1 AND po.data BETWEEN $2 AND $3
+      `, [empresaId, periodoDepois.inicio, periodoDepois.fim])
+    ]);
+
+    // ========================================
+    // 4. BUSCAR DADOS DE SETUP (ANTES x DEPOIS separados)
+    // ========================================
+    const [setupAntes, setupDepois] = await Promise.all([
+      client.query(`
+        SELECT COALESCE(AVG(pt.tempo_setup_minutos), 0) as setup_medio
+        FROM posto_trabalho pt
+        JOIN linhas_producao l ON l.id = pt.linha_id
+        WHERE l.empresa_id = $1
+          AND pt.created_at BETWEEN $2 AND $3
+      `, [empresaId, periodoAntes.inicio, periodoAntes.fim]),
+      client.query(`
+        SELECT COALESCE(AVG(pt.tempo_setup_minutos), 0) as setup_medio
+        FROM posto_trabalho pt
+        JOIN linhas_producao l ON l.id = pt.linha_id
+        WHERE l.empresa_id = $1
+          AND pt.created_at BETWEEN $2 AND $3
+      `, [empresaId, periodoDepois.inicio, periodoDepois.fim])
+    ]);
+
+    // Se não houver dados de setup no período, buscar o último valor conhecido
+    let setupMedioAntes = parseFloat(setupAntes.rows[0]?.setup_medio || 0);
+    let setupMedioDepois = parseFloat(setupDepois.rows[0]?.setup_medio || 0);
     
-    const oeeAntes = await pool.query(`
-      SELECT 
-        COALESCE(AVG(oee), 0) as oee,
-        COALESCE(AVG(disponibilidade), 0) as disponibilidade,
-        COALESCE(AVG(performance), 0) as performance,
-        COALESCE(AVG(qualidade), 0) as qualidade,
-        COALESCE(AVG(pecas_produzidas), 0) as produtividade,
-        COUNT(*) as total_registros
-      FROM producao_oee po
-      JOIN linhas_producao l ON l.id = po.linha_id
-      WHERE l.empresa_id = $1
-        AND po.data BETWEEN $2 AND $3
-    `, [empresaId, periodoAntes.inicio, periodoAntes.fim]);
-
-    const oeeDepois = await pool.query(`
-      SELECT 
-        COALESCE(AVG(oee), 0) as oee,
-        COALESCE(AVG(disponibilidade), 0) as disponibilidade,
-        COALESCE(AVG(performance), 0) as performance,
-        COALESCE(AVG(qualidade), 0) as qualidade,
-        COALESCE(AVG(pecas_produzidas), 0) as produtividade,
-        COUNT(*) as total_registros
-      FROM producao_oee po
-      JOIN linhas_producao l ON l.id = po.linha_id
-      WHERE l.empresa_id = $1
-        AND po.data BETWEEN $2 AND $3
-    `, [empresaId, periodoDepois.inicio, periodoDepois.fim]);
+    if (setupMedioAntes === 0) {
+      const ultimoSetup = await client.query(`
+        SELECT tempo_setup_minutos
+        FROM posto_trabalho pt
+        JOIN linhas_producao l ON l.id = pt.linha_id
+        WHERE l.empresa_id = $1
+        ORDER BY pt.updated_at DESC
+        LIMIT 1
+      `, [empresaId]);
+      setupMedioAntes = parseFloat(ultimoSetup.rows[0]?.tempo_setup_minutos || 0);
+      setupMedioDepois = setupMedioAntes; // Se não tem depois, usa o mesmo
+    }
 
     // ========================================
-    // 3. BUSCAR DADOS REAIS DE SETUP (POSTOS)
+    // 5. BUSCAR DADOS DE PERDAS (REFUGO, MICROPARADAS)
     // ========================================
-    
-    const setupQuery = await pool.query(`
-      SELECT 
-        COALESCE(AVG(pt.tempo_setup_minutos), 0) as setup_medio
-      FROM posto_trabalho pt
-      JOIN linhas_producao l ON l.id = pt.linha_id
-      WHERE l.empresa_id = $1
-    `, [empresaId]);
-
-    const setupMedio = setupQuery.rows[0]?.setup_medio || 0;
-
-    // ========================================
-    // 4. BUSCAR DADOS REAIS DE PERDAS (REFUGO, MICROPARADAS)
-    // ========================================
-    
-    const perdasAntes = await pool.query(`
-      SELECT 
-        COALESCE(SUM(pl.refugo_pecas), 0) as total_refugo,
-        COALESCE(SUM(pl.microparadas_minutos), 0) as total_microparadas
-      FROM perdas_linha pl
-      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
-      JOIN linhas_producao l ON l.id = lp.linha_id
-      WHERE l.empresa_id = $1
-        AND pl.data_perda BETWEEN $2 AND $3
-    `, [empresaId, periodoAntes.inicio, periodoAntes.fim]);
-
-    const perdasDepois = await pool.query(`
-      SELECT 
-        COALESCE(SUM(pl.refugo_pecas), 0) as total_refugo,
-        COALESCE(SUM(pl.microparadas_minutos), 0) as total_microparadas
-      FROM perdas_linha pl
-      JOIN linha_produto lp ON lp.id = pl.linha_produto_id
-      JOIN linhas_producao l ON l.id = lp.linha_id
-      WHERE l.empresa_id = $1
-        AND pl.data_perda BETWEEN $2 AND $3
-    `, [empresaId, periodoDepois.inicio, periodoDepois.fim]);
-
-    // Calcular médias diárias
     const diasAntes = Math.ceil((periodoAntes.fim - periodoAntes.inicio) / (1000 * 60 * 60 * 24)) || 1;
     const diasDepois = Math.ceil((periodoDepois.fim - periodoDepois.inicio) / (1000 * 60 * 60 * 24)) || 1;
+
+    const [perdasAntes, perdasDepois] = await Promise.all([
+      client.query(`
+        SELECT 
+          COALESCE(SUM(pl.refugo_pecas), 0) as total_refugo,
+          COALESCE(SUM(pl.microparadas_minutos), 0) as total_microparadas
+        FROM perdas_linha pl
+        JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+        JOIN linhas_producao l ON l.id = lp.linha_id
+        WHERE l.empresa_id = $1 AND pl.data_perda BETWEEN $2 AND $3
+      `, [empresaId, periodoAntes.inicio, periodoAntes.fim]),
+      client.query(`
+        SELECT 
+          COALESCE(SUM(pl.refugo_pecas), 0) as total_refugo,
+          COALESCE(SUM(pl.microparadas_minutos), 0) as total_microparadas
+        FROM perdas_linha pl
+        JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+        JOIN linhas_producao l ON l.id = lp.linha_id
+        WHERE l.empresa_id = $1 AND pl.data_perda BETWEEN $2 AND $3
+      `, [empresaId, periodoDepois.inicio, periodoDepois.fim])
+    ]);
 
     const refugoDiarioAntes = (perdasAntes.rows[0]?.total_refugo || 0) / diasAntes;
     const refugoDiarioDepois = (perdasDepois.rows[0]?.total_refugo || 0) / diasDepois;
@@ -8691,62 +8795,33 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     const microparadasDiariasDepois = (perdasDepois.rows[0]?.total_microparadas || 0) / diasDepois;
 
     // ========================================
-    // 5. BUSCAR DADOS DA EMPRESA PARA CÁLCULO FINANCEIRO
+    // 6. MONTAR DADOS PARA A CALCULADORA
     // ========================================
-    
-    const empresaRes = await pool.query(`
-      SELECT dias_produtivos_mes
-      FROM empresas
-      WHERE id = $1
-    `, [empresaId]);
-    
-    const diasProdutivos = empresaRes.rows[0]?.dias_produtivos_mes || 22;
-    const valorMedioPeca = 50;
-    const custoHoraMedio = 80;
-    const numTrocasDiarias = 2;
+    const dadosAntes = {
+      refugoDiario: refugoDiarioAntes,
+      microparadasDiarias: microparadasDiariasAntes,
+      setupMedio: setupMedioAntes
+    };
+
+    const dadosDepois = {
+      refugoDiario: refugoDiarioDepois,
+      microparadasDiarias: microparadasDiariasDepois,
+      setupMedio: setupMedioDepois
+    };
+
+    // Calcular financeiro com a calculadora
+    const financeiro = calculadora.calcularFinanceiro(dadosAntes, dadosDepois);
 
     // ========================================
-    // 6. CALCULAR IMPACTO FINANCEIRO (COM DADOS REAIS)
+    // 7. BUSCAR EVOLUÇÃO MENSAL DO OEE
     // ========================================
-    
-    const perdaRefugoMensalAntes = refugoDiarioAntes * valorMedioPeca * diasProdutivos;
-    const perdaRefugoMensalDepois = refugoDiarioDepois * valorMedioPeca * diasProdutivos;
-    
-    const perdaMicroMensalAntes = (microparadasDiariasAntes / 60) * custoHoraMedio * diasProdutivos;
-    const perdaMicroMensalDepois = (microparadasDiariasDepois / 60) * custoHoraMedio * diasProdutivos;
-    
-    const perdaSetupMensalAntes = (setupMedio / 60) * custoHoraMedio * numTrocasDiarias * diasProdutivos;
-    const perdaSetupMensalDepois = (setupMedio / 60) * custoHoraMedio * numTrocasDiarias * diasProdutivos;
-    
-    const perdaTotalMensalAntes = perdaRefugoMensalAntes + perdaMicroMensalAntes + perdaSetupMensalAntes;
-    const perdaTotalMensalDepois = perdaRefugoMensalDepois + perdaMicroMensalDepois + perdaSetupMensalDepois;
-    const economiaMensal = perdaTotalMensalAntes - perdaTotalMensalDepois;
-    const economiaAnual = economiaMensal * 12;
-
-    // Investimento total
-    let investimentoTotal = 50000;
-    try {
-      const contratoRes = await pool.query(`
-        SELECT valor_contrato FROM empresas WHERE id = $1
-      `, [empresaId]);
-      if (contratoRes.rows[0]?.valor_contrato) {
-        investimentoTotal = parseFloat(contratoRes.rows[0].valor_contrato);
-      }
-    } catch (err) {
-      console.log("ℹ️ Nenhum contrato encontrado, usando valor padrão");
-    }
-
-    const roi = economiaAnual > 0 ? (economiaAnual / investimentoTotal) * 100 : 0;
-    const paybackMeses = economiaMensal > 0 ? investimentoTotal / economiaMensal : 0;
-
-    // ========================================
-    // 7. BUSCAR EVOLUÇÃO MENSAL DO OEE (PARA O GRÁFICO)
-    // ========================================
-    
-    const evolucaoMensal = await pool.query(`
+    const evolucaoMensal = await client.query(`
       SELECT 
         DATE_TRUNC('month', po.data) as mes,
-        ROUND(AVG(po.oee), 2) as oee_medio
+        ROUND(AVG(po.oee), 2) as oee_medio,
+        ROUND(AVG(po.disponibilidade), 2) as disponibilidade_media,
+        ROUND(AVG(po.performance), 2) as performance_media,
+        ROUND(AVG(po.qualidade), 2) as qualidade_media
       FROM producao_oee po
       JOIN linhas_producao l ON l.id = po.linha_id
       WHERE l.empresa_id = $1
@@ -8755,106 +8830,118 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     `, [empresaId]);
 
     // ========================================
-    // 8. FUNÇÃO AUXILIAR PARA CALCULAR DELTA
+    // 8. FUNÇÕES AUXILIARES
     // ========================================
-    
+    const formatarDataBR = (data) => {
+      if (!data) return "";
+      const d = new Date(data);
+      return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+    };
+
     const calcularDelta = (antes, depois) => {
       const delta = depois - antes;
       const percentual = antes !== 0 ? (delta / Math.abs(antes)) * 100 : 0;
       return { delta: parseFloat(delta.toFixed(2)), percentual: parseFloat(percentual.toFixed(2)) };
     };
 
-        // ========================================
-    // 9. MONTAR RESPOSTA (COM DATAS FORMATADAS)
+    // Valores de OEE
+    const oeeAntesVal = parseFloat(oeeAntes.rows[0]?.oee || 0);
+    const oeeDepoisVal = parseFloat(oeeDepois.rows[0]?.oee || 0);
+    const dispAntes = parseFloat(oeeAntes.rows[0]?.disponibilidade || 0);
+    const dispDepois = parseFloat(oeeDepois.rows[0]?.disponibilidade || 0);
+    const perfAntes = parseFloat(oeeAntes.rows[0]?.performance || 0);
+    const perfDepois = parseFloat(oeeDepois.rows[0]?.performance || 0);
+    const qualAntes = parseFloat(oeeAntes.rows[0]?.qualidade || 0);
+    const qualDepois = parseFloat(oeeDepois.rows[0]?.qualidade || 0);
+    const prodAntes = parseFloat(oeeAntes.rows[0]?.produtividade || 0);
+    const prodDepois = parseFloat(oeeDepois.rows[0]?.produtividade || 0);
+
     // ========================================
-    
-    // Função para formatar data no padrão brasileiro (dd/mm/aaaa)
-    const formatarDataBR = (data) => {
-      if (!data) return "";
-      const d = new Date(data);
-      const dia = d.getDate().toString().padStart(2, '0');
-      const mes = (d.getMonth() + 1).toString().padStart(2, '0');
-      const ano = d.getFullYear();
-      return `${dia}/${mes}/${ano}`;
-    };
-    
-    const antes = {
-      oee: parseFloat(oeeAntes.rows[0]?.oee || 0),
-      disponibilidade: parseFloat(oeeAntes.rows[0]?.disponibilidade || 0),
-      performance: parseFloat(oeeAntes.rows[0]?.performance || 0),
-      qualidade: parseFloat(oeeAntes.rows[0]?.qualidade || 0),
-      produtividade: parseFloat(oeeAntes.rows[0]?.produtividade || 0),
-      setup: setupMedio,
-      refugo_diario: refugoDiarioAntes,
-      microparadas_diarias: microparadasDiariasAntes,
-      perda_mensal_total: perdaTotalMensalAntes
-    };
-
-    const depois = {
-      oee: parseFloat(oeeDepois.rows[0]?.oee || 0),
-      disponibilidade: parseFloat(oeeDepois.rows[0]?.disponibilidade || 0),
-      performance: parseFloat(oeeDepois.rows[0]?.performance || 0),
-      qualidade: parseFloat(oeeDepois.rows[0]?.qualidade || 0),
-      produtividade: parseFloat(oeeDepois.rows[0]?.produtividade || 0),
-      setup: setupMedio,
-      refugo_diario: refugoDiarioDepois,
-      microparadas_diarias: microparadasDiariasDepois,
-      perda_mensal_total: perdaTotalMensalDepois
-    };
-
+    // 9. RESPOSTA FINAL
+    // ========================================
     res.status(200).json({
       status: "sucesso",
-      empresa_id: parseInt(empresaId),
+      versao: "2.0",
+      empresa: {
+        id: empresa.id,
+        nome: empresa.nome,
+        configuracao: {
+          custo_hora_maquina: empresa.custo_hora_maquina,
+          valor_refugo_medio: empresa.valor_refugo,
+          dias_produtivos_mes: empresa.dias_produtivos
+        }
+      },
       periodo: {
         antes: {
           inicio: formatarDataBR(periodoAntes.inicio),
           fim: formatarDataBR(periodoAntes.fim),
-          meses_analisados: antes_inicio ? null : parseInt(meses_antes)
+          dias_analisados: diasAntes
         },
         depois: {
           inicio: formatarDataBR(periodoDepois.inicio),
           fim: formatarDataBR(periodoDepois.fim),
-          meses_analisados: depois_inicio ? null : parseInt(meses_depois)
+          dias_analisados: diasDepois
         },
         data_diagnostico: formatarDataBR(dataDiagnostico),
         data_implementacao: formatarDataBR(dataImplementacao)
       },
       indicadores: {
-        oee: { antes: antes.oee, depois: depois.oee, ...calcularDelta(antes.oee, depois.oee) },
-        disponibilidade: { antes: antes.disponibilidade, depois: depois.disponibilidade, ...calcularDelta(antes.disponibilidade, depois.disponibilidade) },
-        performance: { antes: antes.performance, depois: depois.performance, ...calcularDelta(antes.performance, depois.performance) },
-        qualidade: { antes: antes.qualidade, depois: depois.qualidade, ...calcularDelta(antes.qualidade, depois.qualidade) },
-        setup: { antes: antes.setup, depois: depois.setup, ...calcularDelta(antes.setup, depois.setup) },
-        refugo_diario: { antes: antes.refugo_diario, depois: depois.refugo_diario, ...calcularDelta(antes.refugo_diario, depois.refugo_diario) },
-        microparadas: { antes: antes.microparadas_diarias, depois: depois.microparadas_diarias, ...calcularDelta(antes.microparadas_diarias, depois.microparadas_diarias) },
-        produtividade: { antes: antes.produtividade, depois: depois.produtividade, ...calcularDelta(antes.produtividade, depois.produtividade) }
+        oee: { antes: oeeAntesVal, depois: oeeDepoisVal, ...calcularDelta(oeeAntesVal, oeeDepoisVal) },
+        disponibilidade: { antes: dispAntes, depois: dispDepois, ...calcularDelta(dispAntes, dispDepois) },
+        performance: { antes: perfAntes, depois: perfDepois, ...calcularDelta(perfAntes, perfDepois) },
+        qualidade: { antes: qualAntes, depois: qualDepois, ...calcularDelta(qualAntes, qualDepois) },
+        produtividade: { antes: prodAntes, depois: prodDepois, ...calcularDelta(prodAntes, prodDepois) },
+        setup: { 
+          antes: setupMedioAntes, 
+          depois: setupMedioDepois, 
+          ...calcularDelta(setupMedioAntes, setupMedioDepois),
+          unidade: "minutos"
+        },
+        refugo_diario: { 
+          antes: refugoDiarioAntes, 
+          depois: refugoDiarioDepois, 
+          ...calcularDelta(refugoDiarioAntes, refugoDiarioDepois),
+          unidade: "peças/dia"
+        },
+        microparadas_diarias: { 
+          antes: microparadasDiariasAntes, 
+          depois: microparadasDiariasDepois, 
+          ...calcularDelta(microparadasDiariasAntes, microparadasDiariasDepois),
+          unidade: "minutos/dia"
+        }
       },
       financeiro: {
-        perda_mensal_antes: parseFloat(perdaTotalMensalAntes.toFixed(2)),
-        perda_mensal_depois: parseFloat(perdaTotalMensalDepois.toFixed(2)),
-        economia_mensal: parseFloat(economiaMensal.toFixed(2)),
-        economia_anual: parseFloat(economiaAnual.toFixed(2)),
-        investimento_total: investimentoTotal,
-        roi: parseFloat(roi.toFixed(2)),
-        payback_meses: parseFloat(paybackMeses.toFixed(2)),
-        detalhamento_perdas: {
+        perda_mensal_antes: financeiro.perdas.total.antes,
+        perda_mensal_depois: financeiro.perdas.total.depois,
+        economia_mensal: financeiro.economia.mensal,
+        economia_anual: financeiro.economia.anual,
+        investimento_total: calculadora.investimentoTotal,
+        roi: financeiro.roi.percentual,
+        payback_meses: financeiro.roi.paybackMeses,
+        detalhamento: {
           refugo: {
-            antes: parseFloat(perdaRefugoMensalAntes.toFixed(2)),
-            depois: parseFloat(perdaRefugoMensalDepois.toFixed(2))
+            antes: financeiro.perdas.refugo.antes,
+            depois: financeiro.perdas.refugo.depois,
+            economia: financeiro.perdas.refugo.delta
           },
           microparadas: {
-            antes: parseFloat(perdaMicroMensalAntes.toFixed(2)),
-            depois: parseFloat(perdaMicroMensalDepois.toFixed(2))
+            antes: financeiro.perdas.microparadas.antes,
+            depois: financeiro.perdas.microparadas.depois,
+            economia: financeiro.perdas.microparadas.delta
           },
           setup: {
-            antes: parseFloat(perdaSetupMensalAntes.toFixed(2)),
-            depois: parseFloat(perdaSetupMensalDepois.toFixed(2))
+            antes: financeiro.perdas.setup.antes,
+            depois: financeiro.perdas.setup.depois,
+            economia: financeiro.perdas.setup.delta
           }
         }
       },
-      evolucao_mensal_oee: evolucaoMensal.rows.map(row => ({
+      evolucao_mensal: evolucaoMensal.rows.map(row => ({
         mes: row.mes.toISOString().split('T')[0].substring(0, 7),
-        oee: parseFloat(row.oee_medio || 0)
+        oee: parseFloat(row.oee_medio || 0),
+        disponibilidade: parseFloat(row.disponibilidade_media || 0),
+        performance: parseFloat(row.performance_media || 0),
+        qualidade: parseFloat(row.qualidade_media || 0)
       })),
       metadados: {
         total_registros_antes: parseInt(oeeAntes.rows[0]?.total_registros || 0),
@@ -8864,11 +8951,13 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     });
 
   } catch (error) {
-    console.error("❌ Erro na Validação de Resultados:", error.message);
+    console.error("❌ Erro na Validação de Resultados:", error);
     res.status(500).json({ 
       erro: "Falha ao processar validação de resultados",
       detalhe: error.message 
     });
+  } finally {
+    client.release();
   }
 });
 
