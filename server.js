@@ -8535,7 +8535,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     const ultimaData = new Date(ultimaProducao.rows[0].ultima_data);
     
     // Data do diagnóstico = primeira data de produção + 30 dias (estimativa)
-    // Em um sistema real, você teria essa data no contrato
     const dataDiagnostico = new Date(primeiraData);
     dataDiagnostico.setDate(dataDiagnostico.getDate() + 30);
     
@@ -8599,10 +8598,10 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     `, [empresaId, periodoDepois.inicio, periodoDepois.fim]);
 
     // ========================================
-    // 3. BUSCAR DADOS REAIS DE SETUP (POSTOS)
+    // 3. BUSCAR DADOS REAIS DE SETUP (POSTOS) - CORRIGIDO
     // ========================================
     
-    const setupAntes = await pool.query(`
+    const setupQuery = await pool.query(`
       SELECT 
         COALESCE(AVG(pt.tempo_setup_minutos), 0) as setup_medio
       FROM posto_trabalho pt
@@ -8610,17 +8609,7 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       WHERE l.empresa_id = $1
     `, [empresaId]);
 
-    const setupDepois = await pool.query(`
-      SELECT 
-        COALESCE(AVG(pt.tempo_setup_minutos), 0) as setup_medio
-      FROM posto_trabalho pt
-      JOIN linhas_producao l ON l.id = pt.linha_id
-      WHERE l.empresa_id = $1
-        AND pt.atualizado_em >= $2
-    `, [empresaId, dataImplementacao]);
-
-    // Se não houver dados de setup depois, usar os mesmos valores (não houve melhoria)
-    const setupDepoisValor = setupDepois.rows[0]?.setup_medio || setupAntes.rows[0]?.setup_medio || 0;
+    const setupMedio = setupQuery.rows[0]?.setup_medio || 0;
 
     // ========================================
     // 4. BUSCAR DADOS REAIS DE PERDAS (REFUGO, MICROPARADAS)
@@ -8658,57 +8647,40 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     const microparadasDiariasDepois = (perdasDepois.rows[0]?.total_microparadas || 0) / diasDepois;
 
     // ========================================
-    // 5. BUSCAR FATURAMENTO DA EMPRESA PARA CÁLCULO FINANCEIRO
+    // 5. BUSCAR DADOS DA EMPRESA PARA CÁLCULO FINANCEIRO
     // ========================================
     
     const empresaRes = await pool.query(`
-      SELECT faturamento_mensal_estimado, dias_produtivos_mes
+      SELECT dias_produtivos_mes
       FROM empresas
       WHERE id = $1
     `, [empresaId]);
     
-    // Usar faturamento estimado ou calcular padrão (R$ 500 por funcionário/dia)
-    let faturamentoMensal = 0;
-    if (empresaRes.rows[0]?.faturamento_mensal_estimado) {
-      faturamentoMensal = parseFloat(empresaRes.rows[0].faturamento_mensal_estimado);
-    } else {
-      // Fallback: estimativa conservadora
-      faturamentoMensal = 500000;
-    }
-
-    // Valor médio por peça (se disponível)
-    const valorPecaRes = await pool.query(`
-      SELECT AVG(valor_unitario) as valor_medio
-      FROM produtos
-      WHERE empresa_id = $1
-    `, [empresaId]);
-    const valorMedioPeca = valorPecaRes.rows[0]?.valor_medio || 50;
+    const diasProdutivos = empresaRes.rows[0]?.dias_produtivos_mes || 22;
+    const valorMedioPeca = 50;
+    const custoHoraMedio = 80;
+    const numTrocasDiarias = 2;
 
     // ========================================
     // 6. CALCULAR IMPACTO FINANCEIRO (COM DADOS REAIS)
     // ========================================
     
-    // Perda financeira por refugo (peças refugadas × valor da peça)
-    const perdaRefugoMensalAntes = refugoDiarioAntes * valorMedioPeca * (empresaRes.rows[0]?.dias_produtivos_mes || 22);
-    const perdaRefugoMensalDepois = refugoDiarioDepois * valorMedioPeca * (empresaRes.rows[0]?.dias_produtivos_mes || 22);
+    const perdaRefugoMensalAntes = refugoDiarioAntes * valorMedioPeca * diasProdutivos;
+    const perdaRefugoMensalDepois = refugoDiarioDepois * valorMedioPeca * diasProdutivos;
     
-    // Perda financeira por microparadas (tempo parado × custo hora)
-    const custoHoraMedio = 80; // Valor padrão, pode vir da tabela de cargos
-    const perdaMicroMensalAntes = (microparadasDiariasAntes / 60) * custoHoraMedio * (empresaRes.rows[0]?.dias_produtivos_mes || 22);
-    const perdaMicroMensalDepois = (microparadasDiariasDepois / 60) * custoHoraMedio * (empresaRes.rows[0]?.dias_produtivos_mes || 22);
+    const perdaMicroMensalAntes = (microparadasDiariasAntes / 60) * custoHoraMedio * diasProdutivos;
+    const perdaMicroMensalDepois = (microparadasDiariasDepois / 60) * custoHoraMedio * diasProdutivos;
     
-    // Perda por setup (tempo de setup × custo hora × número de trocas)
-    const numTrocasDiarias = 2; // Estimativa padrão
-    const perdaSetupMensalAntes = (setupAntes.rows[0]?.setup_medio || 0) / 60 * custoHoraMedio * numTrocasDiarias * (empresaRes.rows[0]?.dias_produtivos_mes || 22);
-    const perdaSetupMensalDepois = (setupDepoisValor / 60) * custoHoraMedio * numTrocasDiarias * (empresaRes.rows[0]?.dias_produtivos_mes || 22);
+    const perdaSetupMensalAntes = (setupMedio / 60) * custoHoraMedio * numTrocasDiarias * diasProdutivos;
+    const perdaSetupMensalDepois = (setupMedio / 60) * custoHoraMedio * numTrocasDiarias * diasProdutivos;
     
     const perdaTotalMensalAntes = perdaRefugoMensalAntes + perdaMicroMensalAntes + perdaSetupMensalAntes;
     const perdaTotalMensalDepois = perdaRefugoMensalDepois + perdaMicroMensalDepois + perdaSetupMensalDepois;
     const economiaMensal = perdaTotalMensalAntes - perdaTotalMensalDepois;
     const economiaAnual = economiaMensal * 12;
 
-    // Investimento total (buscar do contrato ou usar padrão)
-    let investimentoTotal = 50000; // Valor padrão, pode vir da tabela de contratos
+    // Investimento total
+    let investimentoTotal = 50000;
     try {
       const contratoRes = await pool.query(`
         SELECT valor_contrato FROM empresas WHERE id = $1
@@ -8758,7 +8730,7 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       performance: parseFloat(oeeAntes.rows[0]?.performance || 0),
       qualidade: parseFloat(oeeAntes.rows[0]?.qualidade || 0),
       produtividade: parseFloat(oeeAntes.rows[0]?.produtividade || 0),
-      setup: parseFloat(setupAntes.rows[0]?.setup_medio || 0),
+      setup: setupMedio,
       refugo_diario: refugoDiarioAntes,
       microparadas_diarias: microparadasDiariasAntes,
       perda_mensal_total: perdaTotalMensalAntes
@@ -8770,7 +8742,7 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       performance: parseFloat(oeeDepois.rows[0]?.performance || 0),
       qualidade: parseFloat(oeeDepois.rows[0]?.qualidade || 0),
       produtividade: parseFloat(oeeDepois.rows[0]?.produtividade || 0),
-      setup: setupDepoisValor,
+      setup: setupMedio,
       refugo_diario: refugoDiarioDepois,
       microparadas_diarias: microparadasDiariasDepois,
       perda_mensal_total: perdaTotalMensalDepois
