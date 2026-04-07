@@ -8498,72 +8498,116 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
  * - Impacto financeiro (calculado a partir das perdas reais)
  * 
  * Nada é inventado. Tudo vem do banco de dados.
+ * 
+ * Parâmetros de query:
+ * - meses_antes: número de meses para o período antes (padrão 3)
+ * - meses_depois: número de meses para o período depois (padrão 3)
+ * - antes_inicio: data personalizada para início do período antes (YYYY-MM-DD)
+ * - antes_fim: data personalizada para fim do período antes (YYYY-MM-DD)
+ * - depois_inicio: data personalizada para início do período depois (YYYY-MM-DD)
+ * - depois_fim: data personalizada para fim do período depois (YYYY-MM-DD)
  */
 app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) => {
   const { empresaId } = req.params;
-  const { meses_antes = 3, meses_depois = 3 } = req.query;
+  const { 
+    meses_antes = 3, 
+    meses_depois = 3,
+    antes_inicio,
+    antes_fim,
+    depois_inicio,
+    depois_fim
+  } = req.query;
 
   try {
+    let periodoAntes, periodoDepois;
+    let dataDiagnostico, dataImplementacao;
+
     // ========================================
-    // 1. BUSCAR DATAS IMPORTANTES
+    // 1. DEFINIR PERÍODOS (MANUAL OU AUTOMÁTICO)
     // ========================================
     
-    // Buscar a primeira data de produção registrada (início da operação)
-    const primeiraProducao = await pool.query(`
-      SELECT MIN(data) as primeira_data
-      FROM producao_oee po
-      JOIN linhas_producao l ON l.id = po.linha_id
-      WHERE l.empresa_id = $1
-    `, [empresaId]);
+    if (antes_inicio && antes_fim && depois_inicio && depois_fim) {
+      // Usar datas fornecidas manualmente pelo usuário
+      periodoAntes = {
+        inicio: new Date(antes_inicio),
+        fim: new Date(antes_fim)
+      };
+      periodoDepois = {
+        inicio: new Date(depois_inicio),
+        fim: new Date(depois_fim)
+      };
+      
+      // Datas estimadas para exibição
+      dataDiagnostico = new Date(periodoAntes.fim);
+      dataDiagnostico.setDate(dataDiagnostico.getDate() + 1);
+      dataImplementacao = new Date(periodoDepois.inicio);
+      dataImplementacao.setDate(dataImplementacao.getDate() - 1);
+      
+      // Garantir que as datas são válidas
+      if (isNaN(periodoAntes.inicio.getTime()) || isNaN(periodoAntes.fim.getTime()) ||
+          isNaN(periodoDepois.inicio.getTime()) || isNaN(periodoDepois.fim.getTime())) {
+        return res.status(400).json({ 
+          erro: "Datas inválidas. Use o formato YYYY-MM-DD."
+        });
+      }
+    } else {
+      // Buscar a primeira data de produção registrada (início da operação)
+      const primeiraProducao = await pool.query(`
+        SELECT MIN(data) as primeira_data
+        FROM producao_oee po
+        JOIN linhas_producao l ON l.id = po.linha_id
+        WHERE l.empresa_id = $1
+      `, [empresaId]);
 
-    // Buscar a última data de produção registrada
-    const ultimaProducao = await pool.query(`
-      SELECT MAX(data) as ultima_data
-      FROM producao_oee po
-      JOIN linhas_producao l ON l.id = po.linha_id
-      WHERE l.empresa_id = $1
-    `, [empresaId]);
+      // Buscar a última data de produção registrada
+      const ultimaProducao = await pool.query(`
+        SELECT MAX(data) as ultima_data
+        FROM producao_oee po
+        JOIN linhas_producao l ON l.id = po.linha_id
+        WHERE l.empresa_id = $1
+      `, [empresaId]);
 
-    if (!primeiraProducao.rows[0]?.primeira_data) {
-      return res.status(404).json({ 
-        erro: "Nenhum dado de produção encontrado para esta empresa.",
-        mensagem: "Registre produções na tabela producao_oee para gerar a validação."
-      });
+      if (!primeiraProducao.rows[0]?.primeira_data) {
+        return res.status(404).json({ 
+          erro: "Nenhum dado de produção encontrado para esta empresa.",
+          mensagem: "Registre produções na tabela producao_oee para gerar a validação."
+        });
+      }
+
+      const primeiraData = new Date(primeiraProducao.rows[0].primeira_data);
+      const ultimaData = new Date(ultimaProducao.rows[0].ultima_data);
+      
+      // Data do diagnóstico = primeira data de produção + 30 dias (estimativa)
+      dataDiagnostico = new Date(primeiraData);
+      dataDiagnostico.setDate(dataDiagnostico.getDate() + 30);
+      
+      // Data da implementação = data do diagnóstico + 60 dias
+      dataImplementacao = new Date(dataDiagnostico);
+      dataImplementacao.setDate(dataImplementacao.getDate() + 60);
+
+      // Definir períodos de análise
+      const fimPeriodoAntes = new Date(dataDiagnostico);
+      fimPeriodoAntes.setDate(fimPeriodoAntes.getDate() - 1);
+      
+      const inicioPeriodoAntes = new Date(fimPeriodoAntes);
+      inicioPeriodoAntes.setMonth(inicioPeriodoAntes.getMonth() - parseInt(meses_antes));
+      
+      const inicioPeriodoDepois = new Date(dataImplementacao);
+      inicioPeriodoDepois.setDate(inicioPeriodoDepois.getDate() + 1);
+      
+      const fimPeriodoDepois = new Date(inicioPeriodoDepois);
+      fimPeriodoDepois.setMonth(fimPeriodoDepois.getMonth() + parseInt(meses_depois));
+      
+      // Ajustar para não ultrapassar os dados disponíveis
+      const ajustarPeriodo = (inicio, fim, dataMin, dataMax) => {
+        if (inicio < dataMin) inicio = dataMin;
+        if (fim > dataMax) fim = dataMax;
+        return { inicio, fim };
+      };
+
+      periodoAntes = ajustarPeriodo(inicioPeriodoAntes, fimPeriodoAntes, primeiraData, dataDiagnostico);
+      periodoDepois = ajustarPeriodo(inicioPeriodoDepois, fimPeriodoDepois, dataImplementacao, ultimaData);
     }
-
-    const primeiraData = new Date(primeiraProducao.rows[0].primeira_data);
-    const ultimaData = new Date(ultimaProducao.rows[0].ultima_data);
-    
-    // Data do diagnóstico = primeira data de produção + 30 dias (estimativa)
-    const dataDiagnostico = new Date(primeiraData);
-    dataDiagnostico.setDate(dataDiagnostico.getDate() + 30);
-    
-    // Data da implementação = data do diagnóstico + 60 dias
-    const dataImplementacao = new Date(dataDiagnostico);
-    dataImplementacao.setDate(dataImplementacao.getDate() + 60);
-
-    // Definir períodos de análise
-    const fimPeriodoAntes = new Date(dataDiagnostico);
-    fimPeriodoAntes.setDate(fimPeriodoAntes.getDate() - 1);
-    
-    const inicioPeriodoAntes = new Date(fimPeriodoAntes);
-    inicioPeriodoAntes.setMonth(inicioPeriodoAntes.getMonth() - parseInt(meses_antes));
-    
-    const inicioPeriodoDepois = new Date(dataImplementacao);
-    inicioPeriodoDepois.setDate(inicioPeriodoDepois.getDate() + 1);
-    
-    const fimPeriodoDepois = new Date(inicioPeriodoDepois);
-    fimPeriodoDepois.setMonth(fimPeriodoDepois.getMonth() + parseInt(meses_depois));
-    
-    // Ajustar para não ultrapassar os dados disponíveis
-    const ajustarPeriodo = (inicio, fim, dataMin, dataMax) => {
-      if (inicio < dataMin) inicio = dataMin;
-      if (fim > dataMax) fim = dataMax;
-      return { inicio, fim };
-    };
-
-    const periodoAntes = ajustarPeriodo(inicioPeriodoAntes, fimPeriodoAntes, primeiraData, dataDiagnostico);
-    const periodoDepois = ajustarPeriodo(inicioPeriodoDepois, fimPeriodoDepois, dataImplementacao, ultimaData);
 
     // ========================================
     // 2. BUSCAR DADOS REAIS DE PRODUÇÃO (OEE)
@@ -8598,7 +8642,7 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     `, [empresaId, periodoDepois.inicio, periodoDepois.fim]);
 
     // ========================================
-    // 3. BUSCAR DADOS REAIS DE SETUP (POSTOS) - CORRIGIDO
+    // 3. BUSCAR DADOS REAIS DE SETUP (POSTOS)
     // ========================================
     
     const setupQuery = await pool.query(`
@@ -8755,12 +8799,12 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
         antes: {
           inicio: periodoAntes.inicio.toISOString().split('T')[0],
           fim: periodoAntes.fim.toISOString().split('T')[0],
-          meses_analisados: parseInt(meses_antes)
+          meses_analisados: antes_inicio ? null : parseInt(meses_antes)
         },
         depois: {
           inicio: periodoDepois.inicio.toISOString().split('T')[0],
           fim: periodoDepois.fim.toISOString().split('T')[0],
-          meses_analisados: parseInt(meses_depois)
+          meses_analisados: depois_inicio ? null : parseInt(meses_depois)
         },
         data_diagnostico: dataDiagnostico.toISOString().split('T')[0],
         data_implementacao: dataImplementacao.toISOString().split('T')[0]
