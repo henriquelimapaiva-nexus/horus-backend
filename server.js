@@ -7136,17 +7136,18 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
       throw new Error(`Lead ID ${id} não existe`);
     }
     
-    // 🔥 CORREÇÃO: Forçar a data no formato YYYY-MM-DD sem timezone
-    let dataFormatada = data;
-    if (dataFormatada) {
-      // Se a data vier com T (ISO), pega só a parte da data
-      dataFormatada = dataFormatada.split('T')[0];
+    // 🔥 CORREÇÃO DEFINITIVA: SEM timezone, SEM ISO
+    let dataFormatada;
+
+    if (data) {
+      dataFormatada = data.split('T')[0];
     } else {
-      // Se não veio data, usa a data local do Brasil
-      const agora = new Date();
-      const offset = -3;
-      const dataLocal = new Date(agora.getTime() + (offset * 60 * 60 * 1000));
-      dataFormatada = dataLocal.toISOString().split('T')[0];
+      const hoje = new Date();
+      const ano = hoje.getFullYear();
+      const mes = String(hoje.getMonth() + 1).padStart(2, '0');
+      const dia = String(hoje.getDate()).padStart(2, '0');
+
+      dataFormatada = `${ano}-${mes}-${dia}`;
     }
     
     const query = `
@@ -7159,14 +7160,13 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
       id, 
       tipo, 
       descricao || null, 
-      dataFormatada,  // 🔥 USANDO A DATA FORMATADA
+      dataFormatada,
       hora || new Date().toLocaleTimeString('pt-BR', { hour12: false }), 
       criado_por
     ];
     
     const result = await client.query(query, values);
     
-    // 🔥 CORREÇÃO: Usar a mesma data formatada no UPDATE
     await client.query(
       `UPDATE leads SET 
         ultimo_contato = $1::date,
