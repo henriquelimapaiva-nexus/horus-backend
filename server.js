@@ -6878,7 +6878,7 @@ app.post("/api/horas", autenticarToken, async (req, res) => {
       INSERT INTO registro_horas (data, horas, tipo, descricao, projeto_id)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [data || getDataLocalBrasil(), horas, tipo || 'faturável', descricao || null, projeto_id || null]);
+    `, [data, horas, tipo || 'faturável', descricao || null, projeto_id || null]);
     
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -7158,7 +7158,7 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
         ultimo_contato = $1,
         data_atualizacao = CURRENT_TIMESTAMP
       WHERE id = $2`,
-      [data || getDataLocalBrasil(), id]
+      [data, id]
     );
     
     await client.query('COMMIT');
