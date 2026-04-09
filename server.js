@@ -27,6 +27,16 @@ app.use(cors({
 app.use(express.json());
 
 // ========================================
+// 🕒 FUNÇÃO AUXILIAR PARA DATA LOCAL BRASIL
+// ========================================
+function getDataLocalBrasil() {
+  const agora = new Date();
+  const offset = -3; // Brasil (UTC-3)
+  const dataLocal = new Date(agora.getTime() + (offset * 60 * 60 * 1000));
+  return dataLocal.toISOString().split('T')[0];
+}
+
+// ========================================
 // 🚦 GESTÃO DE TRÁFEGO (RATE LIMITING)
 // ========================================
 const apiLimiter = rateLimit({
@@ -6868,7 +6878,7 @@ app.post("/api/horas", autenticarToken, async (req, res) => {
       INSERT INTO registro_horas (data, horas, tipo, descricao, projeto_id)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [data || new Date().toISOString().split('T')[0], horas, tipo || 'faturável', descricao || null, projeto_id || null]);
+    `, [data || getDataLocalBrasil(), horas, tipo || 'faturável', descricao || null, projeto_id || null]);
     
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -7148,7 +7158,7 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
         ultimo_contato = $1,
         data_atualizacao = CURRENT_TIMESTAMP
       WHERE id = $2`,
-      [data || new Date().toISOString().split('T')[0], id]
+      [data || getDataLocalBrasil(), id]
     );
     
     await client.query('COMMIT');
