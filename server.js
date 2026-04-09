@@ -7138,7 +7138,7 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
     
     const query = `
       INSERT INTO interacoes_leads (lead_id, tipo, descricao, data, hora, criado_por, criado_em)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4::date, $5, $6, CURRENT_TIMESTAMP)
       RETURNING *
     `;
     
@@ -7155,7 +7155,7 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
     
     await client.query(
       `UPDATE leads SET 
-        ultimo_contato = $1,
+        ultimo_contato = $1::date,
         data_atualizacao = CURRENT_TIMESTAMP
       WHERE id = $2`,
       [data, id]
