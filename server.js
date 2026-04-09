@@ -6899,12 +6899,11 @@ app.get("/api/horas/resumo", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🎯 MÓDULO: GESTÃO DE LEADS (PROSPECÇÃO)
+// 🎯 MÓDULO: GESTÃO DE LEADS (PROSPECÇÃO) - CORRIGIDO
 // ========================================
 
 /**
  * 1️⃣ LISTAR TODOS OS LEADS
- * Filtros por status, consultor, data
  */
 app.get("/api/leads", autenticarToken, async (req, res) => {
   try {
@@ -6945,7 +6944,7 @@ app.get("/api/leads", autenticarToken, async (req, res) => {
       paramIndex++;
     }
     
-    query += ` ORDER BY l.probabilidade_fechamento DESC, l.ultimo_contato DESC NULLS LAST, l.data_criacao DESC`;
+    query += ` ORDER BY l.ultimo_contato DESC NULLS LAST, l.data_criacao DESC`;
     
     const result = await pool.query(query, values);
     res.json(result.rows);
@@ -6974,7 +6973,6 @@ app.get("/api/leads/:id", autenticarToken, async (req, res) => {
       return res.status(404).json({ erro: "Lead não encontrado" });
     }
     
-    // Buscar interações do lead
     const interacoesResult = await pool.query(`
       SELECT i.*, u.nome as criado_por_nome
       FROM interacoes_leads i
@@ -7000,7 +6998,7 @@ app.get("/api/leads/:id", autenticarToken, async (req, res) => {
 app.post("/api/leads", autenticarToken, async (req, res) => {
   const {
     nome, cnpj, contato_nome, contato_email, contato_telefone,
-    fonte, status, potencial_faturamento, probabilidade_fechamento,
+    fonte, status, potencial_faturamento,
     ultimo_contato, proximo_contato, observacoes
   } = req.body;
   
@@ -7010,13 +7008,12 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
   
   try {
     const potencial = parseFloat(potencial_faturamento) || 0;
-    const probabilidade = parseInt(probabilidade_fechamento) || 30;
     
     const result = await pool.query(`
       INSERT INTO leads (
         nome, cnpj, contato_nome, contato_email, contato_telefone,
-        fonte, status, potencial_faturamento, probabilidade_fechamento,
-        ultimo_contato, proximo_contato, observacoes
+        fonte, status, potencial_faturamento,
+        ultimo_contato, proximo_contato, observacoes, consultor_id
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
     `, [
@@ -7027,11 +7024,11 @@ app.post("/api/leads", autenticarToken, async (req, res) => {
       contato_telefone || null,
       fonte || 'indicação', 
       status || 'prospecção',
-      potencial, 
-      probabilidade,
+      potencial,
       ultimo_contato || null, 
       proximo_contato || null,
-      observacoes || null
+      observacoes || null,
+      req.usuario.id
     ]);
     
     res.status(201).json(result.rows[0]);
@@ -7049,7 +7046,7 @@ app.put("/api/leads/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const {
     nome, cnpj, contato_nome, contato_email, contato_telefone,
-    fonte, status, potencial_faturamento, probabilidade_fechamento,
+    fonte, status, potencial_faturamento,
     ultimo_contato, proximo_contato, observacoes, consultor_id
   } = req.body;
   
@@ -7064,17 +7061,16 @@ app.put("/api/leads/:id", autenticarToken, async (req, res) => {
         fonte = COALESCE($6, fonte),
         status = COALESCE($7, status),
         potencial_faturamento = COALESCE($8, potencial_faturamento),
-        probabilidade_fechamento = COALESCE($9, probabilidade_fechamento),
-        ultimo_contato = COALESCE($10, ultimo_contato),
-        proximo_contato = COALESCE($11, proximo_contato),
-        observacoes = COALESCE($12, observacoes),
-        consultor_id = COALESCE($13, consultor_id),
+        ultimo_contato = COALESCE($9, ultimo_contato),
+        proximo_contato = COALESCE($10, proximo_contato),
+        observacoes = COALESCE($11, observacoes),
+        consultor_id = COALESCE($12, consultor_id),
         data_atualizacao = CURRENT_TIMESTAMP
-      WHERE id = $14
+      WHERE id = $13
       RETURNING *
     `, [
       nome, cnpj, contato_nome, contato_email, contato_telefone,
-      fonte, status, potencial_faturamento, probabilidade_fechamento,
+      fonte, status, potencial_faturamento,
       ultimo_contato, proximo_contato, observacoes, consultor_id, id
     ]);
     
@@ -7092,9 +7088,6 @@ app.put("/api/leads/:id", autenticarToken, async (req, res) => {
 
 /**
  * 5️⃣ REGISTRAR INTERAÇÃO COM LEAD
- */
-/**
- * REGISTRAR INTERAÇÃO COM LEAD
  */
 app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   const { id } = req.params;
@@ -7115,7 +7108,6 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
   try {
     await client.query('BEGIN');
     
-    // VALIDAÇÃO: Verificar se o usuário existe no banco
     const userCheck = await client.query(
       "SELECT id FROM usuarios WHERE id = $1",
       [criado_por]
@@ -7125,7 +7117,6 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
       throw new Error(`Usuário ID ${criado_por} não existe no banco de dados`);
     }
     
-    // VALIDAÇÃO: Verificar se o lead existe
     const leadCheck = await client.query(
       "SELECT id FROM leads WHERE id = $1",
       [id]
@@ -7135,7 +7126,6 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
       throw new Error(`Lead ID ${id} não existe`);
     }
     
-    // Inserir interação
     const query = `
       INSERT INTO interacoes_leads (lead_id, tipo, descricao, data, hora, criado_por, criado_em)
       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
@@ -7153,7 +7143,6 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
     
     const result = await client.query(query, values);
     
-    // Atualizar último contato do lead
     await client.query(
       `UPDATE leads SET 
         ultimo_contato = $1,
@@ -7186,7 +7175,6 @@ app.delete("/api/leads/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
   
   try {
-    // As interações serão deletadas automaticamente pelo ON DELETE CASCADE
     const result = await pool.query(
       "DELETE FROM leads WHERE id = $1 RETURNING nome",
       [id]
@@ -7205,7 +7193,7 @@ app.delete("/api/leads/:id", autenticarToken, async (req, res) => {
 });
 
 /**
- * 7️⃣ DASHBOARD DE LEADS (MÉTRICAS)
+ * 7️⃣ DASHBOARD DE LEADS (MÉTRICAS) - CORRIGIDO
  */
 app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
   try {
@@ -7213,22 +7201,20 @@ app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
       SELECT 
         COUNT(*) as total_leads,
         COUNT(*) FILTER (WHERE status = 'prospecção') as em_prospeccao,
-        COUNT(*) FILTER (WHERE status = 'contato_inicial') as contato_inicial,
-        COUNT(*) FILTER (WHERE status = 'proposta_enviada') as proposta_enviada,
-        COUNT(*) FILTER (WHERE status = 'negociação') as negociacao,
-        COUNT(*) FILTER (WHERE status = 'fechado') as fechados,
+        COUNT(*) FILTER (WHERE status = 'diagnostico_autorizado') as diagnostico_autorizado,
+        COUNT(*) FILTER (WHERE status = 'diagnostico_entregue') as diagnostico_entregue,
+        COUNT(*) FILTER (WHERE status = 'negociacao') as negociacao,
+        COUNT(*) FILTER (WHERE status = 'contrato_assinado') as contrato_assinado,
         COUNT(*) FILTER (WHERE status = 'perdido') as perdidos,
-        COALESCE(SUM(potencial_faturamento) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_total,
-        COALESCE(SUM(potencial_faturamento * probabilidade_fechamento / 100) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_ponderado
+        COALESCE(SUM(potencial_faturamento) FILTER (WHERE status NOT IN ('perdido', 'contrato_assinado')), 0) as pipeline_total
       FROM leads
     `);
     
-    // Leads com próximos contatos nos próximos 7 dias
     const proximosContatos = await pool.query(`
       SELECT id, nome, proximo_contato, contato_nome, contato_telefone
       FROM leads
       WHERE proximo_contato BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-      AND status NOT IN ('fechado', 'perdido')
+      AND status NOT IN ('contrato_assinado', 'perdido')
       ORDER BY proximo_contato ASC
       LIMIT 10
     `);
@@ -7360,7 +7346,6 @@ app.put("/api/tarefas/:id", autenticarToken, async (req, res) => {
   const usuario_id = req.usuario.id;
   
   try {
-    // Verificar se a tarefa pertence ao usuário
     const checkResult = await pool.query(
       "SELECT id FROM tarefas_consultor WHERE id = $1 AND usuario_id = $2",
       [id, usuario_id]
@@ -7370,7 +7355,6 @@ app.put("/api/tarefas/:id", autenticarToken, async (req, res) => {
       return res.status(404).json({ erro: "Tarefa não encontrada" });
     }
     
-    // Calcular data_conclusão se status for concluida
     let dataConclusao = null;
     if (status === 'concluida') {
       dataConclusao = new Date().toISOString().split('T')[0];
@@ -7403,14 +7387,13 @@ app.put("/api/tarefas/:id", autenticarToken, async (req, res) => {
 });
 
 /**
- * 4️⃣ ALTERNAR STATUS DA TAREFA (concluir/reabrir)
+ * 4️⃣ ALTERNAR STATUS DA TAREFA
  */
 app.patch("/api/tarefas/:id/toggle", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const usuario_id = req.usuario.id;
   
   try {
-    // Buscar status atual
     const tarefa = await pool.query(
       "SELECT status FROM tarefas_consultor WHERE id = $1 AND usuario_id = $2",
       [id, usuario_id]
@@ -7466,7 +7449,7 @@ app.delete("/api/tarefas/:id", autenticarToken, async (req, res) => {
 });
 
 /**
- * 6️⃣ RESUMO DE TAREFAS (para o dashboard)
+ * 6️⃣ RESUMO DE TAREFAS
  */
 app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
   const usuario_id = req.usuario.id;
@@ -7484,7 +7467,6 @@ app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
       WHERE usuario_id = $1
     `, [usuario_id]);
     
-    // Buscar próximas tarefas (próximos 7 dias)
     const proximas = await pool.query(`
       SELECT id, titulo, data_limite, prioridade
       FROM tarefas_consultor
@@ -7503,251 +7485,6 @@ app.get("/api/tarefas/resumo", autenticarToken, async (req, res) => {
   } catch (error) {
     console.error("❌ Erro ao buscar resumo de tarefas:", error.message);
     res.status(500).json({ erro: "Erro ao buscar resumo" });
-  }
-});
-
-// ========================================
-// 🎯 MÓDULO: GESTÃO DE LEADS (PROSPECÇÃO)
-// ========================================
-
-/**
- * 1️⃣ LISTAR TODOS OS LEADS
- */
-app.get("/api/leads", autenticarToken, async (req, res) => {
-  try {
-    const { status, data_inicio, data_fim } = req.query;
-    
-    let query = `
-      SELECT l.*, u.nome as consultor_nome,
-        (SELECT COUNT(*) FROM interacoes_leads WHERE lead_id = l.id) as total_interacoes
-      FROM leads l
-      LEFT JOIN usuarios u ON l.consultor_id = u.id
-      WHERE 1=1
-    `;
-    
-    const values = [];
-    let paramIndex = 1;
-    
-    if (status) {
-      query += ` AND l.status = $${paramIndex}`;
-      values.push(status);
-      paramIndex++;
-    }
-    
-    if (data_inicio) {
-      query += ` AND l.data_criacao >= $${paramIndex}`;
-      values.push(data_inicio);
-      paramIndex++;
-    }
-    
-    if (data_fim) {
-      query += ` AND l.data_criacao <= $${paramIndex}`;
-      values.push(data_fim);
-      paramIndex++;
-    }
-    
-    query += ` ORDER BY l.probabilidade_fechamento DESC, l.ultimo_contato DESC NULLS LAST, l.data_criacao DESC`;
-    
-    const result = await pool.query(query, values);
-    res.json(result.rows);
-    
-  } catch (error) {
-    console.error("❌ Erro ao buscar leads:", error.message);
-    res.status(500).json({ erro: "Erro ao buscar leads", detalhes: error.message });
-  }
-});
-
-/**
- * 2️⃣ CRIAR NOVO LEAD
- */
-app.post("/api/leads", autenticarToken, async (req, res) => {
-  const {
-    nome, cnpj, contato_nome, contato_email, contato_telefone,
-    fonte, status, potencial_faturamento, probabilidade_fechamento,
-    ultimo_contato, proximo_contato, observacoes
-  } = req.body;
-  
-  if (!nome) {
-    return res.status(400).json({ erro: "Nome do lead é obrigatório" });
-  }
-  
-  try {
-    const potencial = parseFloat(potencial_faturamento) || 0;
-    const probabilidade = parseInt(probabilidade_fechamento) || 30;
-    
-    const result = await pool.query(`
-      INSERT INTO leads (
-        nome, cnpj, contato_nome, contato_email, contato_telefone,
-        fonte, status, potencial_faturamento, probabilidade_fechamento,
-        ultimo_contato, proximo_contato, observacoes, consultor_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      RETURNING *
-    `, [
-      nome, 
-      cnpj || null, 
-      contato_nome || null, 
-      contato_email || null, 
-      contato_telefone || null,
-      fonte || 'indicação', 
-      status || 'prospecção',
-      potencial, 
-      probabilidade,
-      ultimo_contato || null, 
-      proximo_contato || null,
-      observacoes || null,
-      req.usuario.id
-    ]);
-    
-    res.status(201).json(result.rows[0]);
-    
-  } catch (error) {
-    console.error("❌ Erro ao criar lead:", error.message);
-    res.status(500).json({ erro: "Erro ao criar lead", detalhe: error.message });
-  }
-});
-
-/**
- * 3️⃣ BUSCAR LEAD POR ID
- */
-app.get("/api/leads/:id", autenticarToken, async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    const leadResult = await pool.query(`
-      SELECT l.*, u.nome as consultor_nome
-      FROM leads l
-      LEFT JOIN usuarios u ON l.consultor_id = u.id
-      WHERE l.id = $1
-    `, [id]);
-    
-    if (leadResult.rows.length === 0) {
-      return res.status(404).json({ erro: "Lead não encontrado" });
-    }
-    
-    const interacoesResult = await pool.query(`
-      SELECT * FROM interacoes_leads 
-      WHERE lead_id = $1
-      ORDER BY data DESC, hora DESC
-    `, [id]);
-    
-    res.json({
-      ...leadResult.rows[0],
-      interacoes: interacoesResult.rows
-    });
-    
-  } catch (error) {
-    console.error("❌ Erro ao buscar lead:", error.message);
-    res.status(500).json({ erro: "Erro ao buscar lead" });
-  }
-});
-
-/**
- * 4️⃣ ATUALIZAR LEAD
- */
-app.put("/api/leads/:id", autenticarToken, async (req, res) => {
-  const { id } = req.params;
-  const {
-    nome, cnpj, contato_nome, contato_email, contato_telefone,
-    fonte, status, potencial_faturamento, probabilidade_fechamento,
-    ultimo_contato, proximo_contato, observacoes
-  } = req.body;
-  
-  try {
-    const result = await pool.query(`
-      UPDATE leads SET
-        nome = COALESCE($1, nome),
-        cnpj = COALESCE($2, cnpj),
-        contato_nome = COALESCE($3, contato_nome),
-        contato_email = COALESCE($4, contato_email),
-        contato_telefone = COALESCE($5, contato_telefone),
-        fonte = COALESCE($6, fonte),
-        status = COALESCE($7, status),
-        potencial_faturamento = COALESCE($8, potencial_faturamento),
-        probabilidade_fechamento = COALESCE($9, probabilidade_fechamento),
-        ultimo_contato = COALESCE($10, ultimo_contato),
-        proximo_contato = COALESCE($11, proximo_contato),
-        observacoes = COALESCE($12, observacoes),
-        data_atualizacao = CURRENT_TIMESTAMP
-      WHERE id = $13
-      RETURNING *
-    `, [
-      nome, cnpj, contato_nome, contato_email, contato_telefone,
-      fonte, status, potencial_faturamento, probabilidade_fechamento,
-      ultimo_contato, proximo_contato, observacoes, id
-    ]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Lead não encontrado" });
-    }
-    
-    res.json(result.rows[0]);
-    
-  } catch (error) {
-    console.error("❌ Erro ao atualizar lead:", error.message);
-    res.status(500).json({ erro: "Erro ao atualizar lead" });
-  }
-});
-
-/**
- * 6️⃣ DELETAR LEAD
- */
-app.delete("/api/leads/:id", autenticarToken, async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    const result = await pool.query(
-      "DELETE FROM leads WHERE id = $1 RETURNING nome",
-      [id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "Lead não encontrado" });
-    }
-    
-    res.json({ mensagem: `Lead "${result.rows[0].nome}" removido com sucesso` });
-    
-  } catch (error) {
-    console.error("❌ Erro ao deletar lead:", error.message);
-    res.status(500).json({ erro: "Erro ao deletar lead" });
-  }
-});
-
-/**
- * 7️⃣ DASHBOARD DE LEADS (MÉTRICAS)
- */
-app.get("/api/leads/dashboard/metrics", autenticarToken, async (req, res) => {
-  try {
-    const metrics = await pool.query(`
-      SELECT 
-        COUNT(*) as total_leads,
-        COUNT(*) FILTER (WHERE status = 'prospecção') as em_prospeccao,
-        COUNT(*) FILTER (WHERE status = 'contato_inicial') as contato_inicial,
-        COUNT(*) FILTER (WHERE status = 'proposta_enviada') as proposta_enviada,
-        COUNT(*) FILTER (WHERE status = 'negociação') as negociacao,
-        COUNT(*) FILTER (WHERE status = 'fechado') as fechados,
-        COUNT(*) FILTER (WHERE status = 'perdido') as perdidos,
-        COALESCE(SUM(potencial_faturamento) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_total,
-        COALESCE(SUM(potencial_faturamento * probabilidade_fechamento / 100) FILTER (WHERE status NOT IN ('perdido', 'fechado')), 0) as pipeline_ponderado
-      FROM leads
-    `);
-    
-    const proximosContatos = await pool.query(`
-      SELECT id, nome, proximo_contato, contato_nome, contato_telefone
-      FROM leads
-      WHERE proximo_contato BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-      AND status NOT IN ('fechado', 'perdido')
-      ORDER BY proximo_contato ASC
-      LIMIT 10
-    `);
-    
-    res.json({
-      ...metrics.rows[0],
-      proximos_contatos: proximosContatos.rows
-    });
-    
-  } catch (error) {
-    console.error("❌ Erro ao buscar métricas de leads:", error.message);
-    res.status(500).json({ erro: "Erro ao buscar métricas" });
   }
 });
 
@@ -7891,7 +7628,7 @@ app.post("/api/checklist/item", autenticarToken, async (req, res) => {
 });
 
 /**
- * 4️⃣ ATUALIZAR ITEM (concluir/editar)
+ * 4️⃣ ATUALIZAR ITEM
  */
 app.put("/api/checklist/item/:itemId", autenticarToken, async (req, res) => {
   const { itemId } = req.params;
@@ -8061,14 +7798,11 @@ app.delete("/api/elementos/:id", autenticarToken, async (req, res) => {
 
 /**
  * ROTA: CALCULAR EFICIÊNCIA DE UM POSTO
- * Retorna o OEE/eficiência do posto com base nos dados reais de produção
- * ✅ CORRIGIDO: Rota adicionada para substituir station-efficiency que não existia
  */
 app.get("/api/station-efficiency/:postoId", autenticarToken, async (req, res) => {
   try {
     const { postoId } = req.params;
 
-    // 1. Buscar dados do posto
     const postoRes = await pool.query(`
       SELECT pt.*, l.takt_time_segundos, l.meta_diaria
       FROM posto_trabalho pt
@@ -8085,12 +7819,10 @@ app.get("/api/station-efficiency/:postoId", autenticarToken, async (req, res) =>
     const tempoCiclo = parseFloat(posto.tempo_ciclo_segundos) || 0;
     const disponibilidade = (parseFloat(posto.disponibilidade_percentual) || 100) / 100;
 
-    // 2. Calcular eficiência do posto
     let eficiencia = 0;
     let classificacao = "Sem dados";
 
     if (taktAlvo > 0 && tempoCiclo > 0) {
-      // Eficiência = (takt / ciclo_real) * 100
       const cicloReal = tempoCiclo / disponibilidade;
       eficiencia = Math.min(100, Math.round((taktAlvo / cicloReal) * 100));
 
@@ -8100,7 +7832,6 @@ app.get("/api/station-efficiency/:postoId", autenticarToken, async (req, res) =>
       else classificacao = "Crítico";
     }
 
-    // 3. Buscar medições recentes (últimos 30 dias)
     const medicoesRes = await pool.query(`
       SELECT tempo_ciclo_segundos, data_medicao
       FROM ciclo_medicao
@@ -8121,7 +7852,6 @@ app.get("/api/station-efficiency/:postoId", autenticarToken, async (req, res) =>
       else if (cv > 10) estabilidade = "Estabilidade moderada";
     }
 
-    // 4. Buscar perdas do posto (via linha_produto)
     const perdasRes = await pool.query(`
       SELECT 
         COALESCE(SUM(pl.microparadas_minutos), 0) as microparadas,
@@ -8172,7 +7902,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
   const { empresaId } = req.params;
 
   try {
-    // 1. DADOS BÁSICOS DA EMPRESA
     const empresaRes = await pool.query(
       "SELECT id, nome, cnpj, segmento, dias_produtivos_mes FROM empresas WHERE id = $1",
       [empresaId]
@@ -8186,7 +7915,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
     const diasMes = empresa.dias_produtivos_mes || 22;
     const horasDia = 8;
 
-    // 2. LINHAS DA EMPRESA
     const linhasRes = await pool.query(
       "SELECT * FROM linhas_producao WHERE empresa_id = $1 ORDER BY nome",
       [empresaId]
@@ -8213,14 +7941,12 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       });
     }
 
-    // 3. BUSCAR CARGOS UMA ÚNICA VEZ
     const cargosRes = await pool.query(
       "SELECT * FROM cargos WHERE empresa_id = $1",
       [empresaId]
     );
     const cargos = cargosRes.rows;
 
-    // 4. BUSCAR COLABORADORES
     const colaboradoresRes = await pool.query(`
       SELECT c.id, c.nome, ca.nome as cargo_nome, ca.salario_base, ca.encargos_percentual
       FROM colaborador c
@@ -8228,7 +7954,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       WHERE c.empresa_id = $1
     `, [empresaId]);
 
-    // 5. BUSCAR ALOCAÇÕES ATIVAS
     const alocacoesRes = await pool.query(`
       SELECT a.id, a.colaborador_id, a.posto_id, a.turno, a.ativo,
         c.nome as colaborador_nome,
@@ -8241,7 +7966,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       WHERE a.ativo = true AND l.empresa_id = $1
     `, [empresaId]);
 
-    // 6. VARIÁVEIS PARA ACUMULAR
     let custoTotalMaoObra = 0;
     let faturamentoTotal = 0;
     let perdasSetupTotal = 0;
@@ -8250,16 +7974,13 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
     let listaOEE = [];
     const detalhamentoLinhas = [];
 
-    // 7. PROCESSAR CADA LINHA
     for (const linha of linhas) {
-      // 7.1 POSTOS DA LINHA
       const postosRes = await pool.query(
         "SELECT * FROM posto_trabalho WHERE linha_id = $1 ORDER BY ordem_fluxo",
         [linha.id]
       );
       const postos = postosRes.rows;
 
-      // 7.2 CUSTO DA LINHA (soma dos salários dos colaboradores alocados)
       let custoLinha = 0;
       const alocacoesLinha = alocacoesRes.rows.filter(a => a.linha_nome === linha.nome);
       for (const aloc of alocacoesLinha) {
@@ -8272,32 +7993,25 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       }
       custoTotalMaoObra += custoLinha;
 
-      // 7.3 CUSTO POR MINUTO (baseado no custo da linha)
       const minutosTotais = diasMes * horasDia * 60;
       const custoMinuto = custoLinha / minutosTotais;
 
-      // 7.4 CALCULAR PERDA DE SETUP (CORRIGIDO - baseado em trocas de produto)
       let perdasSetup = 0;
       
-      // Buscar produtos da linha primeiro para saber quantos produtos
-      const produtosQuerySetup = `
+      const produtosCountRes = await pool.query(`
         SELECT COUNT(*) as total_produtos
         FROM linha_produto
         WHERE linha_id = $1
-      `;
-      const produtosCountRes = await pool.query(produtosQuerySetup, [linha.id]);
+      `, [linha.id]);
       const quantidadeProdutos = parseInt(produtosCountRes.rows[0]?.total_produtos) || 1;
       
-      // Número estimado de trocas por mês
       const trocasPorMes = quantidadeProdutos > 1 ? quantidadeProdutos : 1;
       
       for (const posto of postos) {
         const tempoSetup = parseFloat(posto.tempo_setup_minutos) || 0;
-        // Setup mensal = tempo de setup × custo/minuto × número de trocas
         perdasSetup += tempoSetup * custoMinuto * trocasPorMes;
       }
 
-      // 7.5 PRODUTOS DA LINHA
       const produtosQuery = `
         SELECT 
           lp.id as vinculo_id,
@@ -8313,7 +8027,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       const produtosRes = await pool.query(produtosQuery, [linha.id]);
       const produtos = produtosRes.rows;
 
-      // 7.6 PERDAS REAIS (MICRO E REFUGO)
       const perdasQuery = `
         SELECT 
           pl.microparadas_minutos,
@@ -8347,7 +8060,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       perdasMicroTotal += perdasMicro;
       perdasRefugoTotal += perdasRefugo;
 
-      // 7.7 FATURAMENTO REAL
       const producaoQuery = `
         SELECT 
           COALESCE(AVG(pecas_boas), 0) as media_pecas_boas,
@@ -8367,7 +8079,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       faturamentoTotal += faturamentoLinha;
       listaOEE.push(oeeLinha);
 
-      // 7.8 GARGALO
       let gargalo = "Não identificado";
       let maiorCiclo = 0;
       for (const posto of postos) {
@@ -8378,7 +8089,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
         }
       }
 
-      // 7.9 DETALHAMENTO
       detalhamentoLinhas.push({
         id: linha.id,
         nome: linha.nome,
@@ -8416,7 +8126,6 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
     const perdasTotais = perdasSetupTotal + perdasMicroTotal + perdasRefugoTotal;
     const oeeMedio = listaOEE.length > 0 ? listaOEE.reduce((a, b) => a + b, 0) / listaOEE.length : 0;
 
-    // 8. EVOLUÇÃO
     const evolucaoQuery = `
       SELECT 
         DATE_TRUNC('month', data) as mes,
@@ -8435,13 +8144,11 @@ app.get("/api/company/:empresaId/dashboard", autenticarToken, async (req, res) =
       producao: parseInt(row.total_producao) || 0
     }));
 
-    // 9. ROI
     const investimentoSugerido = 50000;
     const ganhoMensal = perdasTotais * 0.3;
     const payback = ganhoMensal > 0 ? investimentoSugerido / ganhoMensal : 999;
     const roiAnual = ganhoMensal > 0 ? (ganhoMensal * 12 / investimentoSugerido) * 100 : 0;
 
-    // 10. RESPOSTA
     res.json({
       empresa: {
         id: empresa.id,
@@ -8500,33 +8207,21 @@ class CalculadoraFinanceira {
     this.investimentoTotal = config.investimentoTotal || 50000;
   }
 
-  /**
-   * Calcula perda financeira por refugo
-   */
   calcularPerdaRefugo(refugoDiario) {
     return refugoDiario * this.valorRefugoMedio * this.diasProdutivosMes;
   }
 
-  /**
-   * Calcula perda financeira por microparadas
-   */
   calcularPerdaMicroparadas(microparadasDiariasMinutos) {
     const horasParadasMes = (microparadasDiariasMinutos / 60) * this.diasProdutivosMes;
     return horasParadasMes * this.custoHoraMaquina;
   }
 
-  /**
-   * Calcula perda financeira por setup
-   */
   calcularPerdaSetup(setupMinutos) {
     const horasSetupDia = (setupMinutos / 60) * this.numTrocasDiarias;
     const horasSetupMes = horasSetupDia * this.diasProdutivosMes;
     return horasSetupMes * this.custoHoraMaquina;
   }
 
-  /**
-   * Calcula todos os indicadores financeiros
-   */
   calcularFinanceiro(dadosAntes, dadosDepois) {
     const perdaRefugoAntes = this.calcularPerdaRefugo(dadosAntes.refugoDiario);
     const perdaRefugoDepois = this.calcularPerdaRefugo(dadosDepois.refugoDiario);
@@ -8564,16 +8259,13 @@ class CalculadoraFinanceira {
     };
   }
 
-  /**
-   * Calcula delta percentual entre dois valores
-   */
   static calcularDelta(antes, depois) {
     const delta = depois - antes;
     const percentual = antes !== 0 ? (delta / Math.abs(antes)) * 100 : 0;
     return {
       valor: parseFloat(delta.toFixed(2)),
       percentual: parseFloat(percentual.toFixed(2)),
-      isMelhoria: (delta > 0 && antes <= depois) || (delta < 0 && antes > depois) // depende do contexto
+      isMelhoria: (delta > 0 && antes <= depois) || (delta < 0 && antes > depois)
     };
   }
 }
@@ -8595,9 +8287,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
   const client = await pool.connect();
   
   try {
-    // ========================================
-    // 1. BUSCAR CONFIGURAÇÕES DA EMPRESA
-    // ========================================
     const configRes = await client.query(`
       SELECT 
         id, nome,
@@ -8616,7 +8305,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
 
     const empresa = configRes.rows[0];
     
-    // Instanciar calculadora com configurações reais da empresa
     const calculadora = new CalculadoraFinanceira({
       custoHoraMaquina: parseFloat(empresa.custo_hora_maquina),
       valorRefugoMedio: parseFloat(empresa.valor_refugo),
@@ -8625,14 +8313,10 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       investimentoTotal: parseFloat(empresa.investimento_total)
     });
 
-    // ========================================
-    // 2. DEFINIR PERÍODOS DE ANÁLISE
-    // ========================================
     let periodoAntes, periodoDepois;
     let dataDiagnostico, dataImplementacao;
 
     if (antes_inicio && antes_fim && depois_inicio && depois_fim) {
-      // Datas personalizadas
       periodoAntes = { inicio: new Date(antes_inicio), fim: new Date(antes_fim) };
       periodoDepois = { inicio: new Date(depois_inicio), fim: new Date(depois_fim) };
       dataDiagnostico = new Date(periodoAntes.fim);
@@ -8645,7 +8329,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
         return res.status(400).json({ erro: "Datas inválidas. Use o formato YYYY-MM-DD." });
       }
     } else {
-      // Períodos automáticos baseados nos dados disponíveis
       const primeiraProducao = await client.query(`
         SELECT MIN(data) as primeira_data
         FROM producao_oee po
@@ -8695,9 +8378,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       periodoDepois = ajustarPeriodo(inicioPeriodoDepois, fimPeriodoDepois, dataImplementacao, ultimaData);
     }
 
-    // ========================================
-    // 3. BUSCAR DADOS DE PRODUÇÃO (OEE)
-    // ========================================
     const [oeeAntes, oeeDepois] = await Promise.all([
       client.query(`
         SELECT 
@@ -8725,9 +8405,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       `, [empresaId, periodoDepois.inicio, periodoDepois.fim])
     ]);
 
-    // ========================================
-    // 4. BUSCAR DADOS DE SETUP (ANTES x DEPOIS separados)
-    // ========================================
     const [setupAntes, setupDepois] = await Promise.all([
       client.query(`
         SELECT COALESCE(AVG(pt.tempo_setup_minutos), 0) as setup_medio
@@ -8745,7 +8422,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       `, [empresaId, periodoDepois.inicio, periodoDepois.fim])
     ]);
 
-    // Se não houver dados de setup no período, buscar o último valor conhecido
     let setupMedioAntes = parseFloat(setupAntes.rows[0]?.setup_medio || 0);
     let setupMedioDepois = parseFloat(setupDepois.rows[0]?.setup_medio || 0);
     
@@ -8759,12 +8435,9 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
         LIMIT 1
       `, [empresaId]);
       setupMedioAntes = parseFloat(ultimoSetup.rows[0]?.tempo_setup_minutos || 0);
-      setupMedioDepois = setupMedioAntes; // Se não tem depois, usa o mesmo
+      setupMedioDepois = setupMedioAntes;
     }
 
-    // ========================================
-    // 5. BUSCAR DADOS DE PERDAS (REFUGO, MICROPARADAS)
-    // ========================================
     const diasAntes = Math.ceil((periodoAntes.fim - periodoAntes.inicio) / (1000 * 60 * 60 * 24)) || 1;
     const diasDepois = Math.ceil((periodoDepois.fim - periodoDepois.inicio) / (1000 * 60 * 60 * 24)) || 1;
 
@@ -8794,9 +8467,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     const microparadasDiariasAntes = (perdasAntes.rows[0]?.total_microparadas || 0) / diasAntes;
     const microparadasDiariasDepois = (perdasDepois.rows[0]?.total_microparadas || 0) / diasDepois;
 
-    // ========================================
-    // 6. MONTAR DADOS PARA A CALCULADORA
-    // ========================================
     const dadosAntes = {
       refugoDiario: refugoDiarioAntes,
       microparadasDiarias: microparadasDiariasAntes,
@@ -8809,12 +8479,8 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       setupMedio: setupMedioDepois
     };
 
-    // Calcular financeiro com a calculadora
     const financeiro = calculadora.calcularFinanceiro(dadosAntes, dadosDepois);
 
-    // ========================================
-    // 7. BUSCAR EVOLUÇÃO MENSAL DO OEE
-    // ========================================
     const evolucaoMensal = await client.query(`
       SELECT 
         DATE_TRUNC('month', po.data) as mes,
@@ -8829,9 +8495,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       ORDER BY mes ASC
     `, [empresaId]);
 
-    // ========================================
-    // 8. FUNÇÕES AUXILIARES
-    // ========================================
     const formatarDataBR = (data) => {
       if (!data) return "";
       const d = new Date(data);
@@ -8844,7 +8507,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
       return { delta: parseFloat(delta.toFixed(2)), percentual: parseFloat(percentual.toFixed(2)) };
     };
 
-    // Valores de OEE
     const oeeAntesVal = parseFloat(oeeAntes.rows[0]?.oee || 0);
     const oeeDepoisVal = parseFloat(oeeDepois.rows[0]?.oee || 0);
     const dispAntes = parseFloat(oeeAntes.rows[0]?.disponibilidade || 0);
@@ -8856,9 +8518,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
     const prodAntes = parseFloat(oeeAntes.rows[0]?.produtividade || 0);
     const prodDepois = parseFloat(oeeDepois.rows[0]?.produtividade || 0);
 
-    // ========================================
-    // 9. RESPOSTA FINAL
-    // ========================================
     res.status(200).json({
       status: "sucesso",
       versao: "2.0",
@@ -8965,7 +8624,6 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
-// Garante que a porta e o ambiente existam antes de subir o motor
 const PORT_SYSTEM = process.env.PORT || 3001;
 const ENV_SYSTEM = process.env.NODE_ENV || 'development';
 
@@ -8983,11 +8641,9 @@ const server = app.listen(PORT_SYSTEM, () => {
   `);
 });
 
-// Tratamento de interrupção graciosa (Graceful Shutdown)
 process.on('SIGTERM', () => {
   console.log('🚨 SIGTERM recebido. Encerrando servidor Hórus...');
   server.close(() => {
-    // Certifique-se de que a variável 'pool' existe no seu Bloco 1
     if (typeof pool !== 'undefined') {
       pool.end();
     }
