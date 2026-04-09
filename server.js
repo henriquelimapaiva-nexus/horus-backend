@@ -7136,6 +7136,19 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
       throw new Error(`Lead ID ${id} não existe`);
     }
     
+    // 🔥 CORREÇÃO: Forçar a data no formato YYYY-MM-DD sem timezone
+    let dataFormatada = data;
+    if (dataFormatada) {
+      // Se a data vier com T (ISO), pega só a parte da data
+      dataFormatada = dataFormatada.split('T')[0];
+    } else {
+      // Se não veio data, usa a data local do Brasil
+      const agora = new Date();
+      const offset = -3;
+      const dataLocal = new Date(agora.getTime() + (offset * 60 * 60 * 1000));
+      dataFormatada = dataLocal.toISOString().split('T')[0];
+    }
+    
     const query = `
       INSERT INTO interacoes_leads (lead_id, tipo, descricao, data, hora, criado_por, criado_em)
       VALUES ($1, $2, $3, $4::date, $5, $6, CURRENT_TIMESTAMP)
@@ -7146,24 +7159,25 @@ app.post("/api/leads/:id/interacoes", autenticarToken, async (req, res) => {
       id, 
       tipo, 
       descricao || null, 
-      data || new Date().toISOString().split('T')[0], 
+      dataFormatada,  // 🔥 USANDO A DATA FORMATADA
       hora || new Date().toLocaleTimeString('pt-BR', { hour12: false }), 
       criado_por
     ];
     
     const result = await client.query(query, values);
     
+    // 🔥 CORREÇÃO: Usar a mesma data formatada no UPDATE
     await client.query(
       `UPDATE leads SET 
         ultimo_contato = $1::date,
         data_atualizacao = CURRENT_TIMESTAMP
       WHERE id = $2`,
-      [data, id]
+      [dataFormatada, id]
     );
     
     await client.query('COMMIT');
     
-    console.log(`✅ Interação registrada - Lead: ${id}, Usuário: ${criado_por}`);
+    console.log(`✅ Interação registrada - Lead: ${id}, Data: ${dataFormatada}`);
     res.status(201).json(result.rows[0]);
     
   } catch (error) {
