@@ -5724,6 +5724,7 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
 
     const representante = {
       nome: dados.representante?.nome || "[NOME DO REPRESENTANTE]",
+      cargo: dados.representante?.cargo || "[CARGO]",
       nacionalidade: dados.representante?.nacionalidade || "[NACIONALIDADE]",
       estado_civil: dados.representante?.estado_civil || "[ESTADO CIVIL]",
       profissao: dados.representante?.profissao || "[PROFISSÃO]",
@@ -5754,6 +5755,75 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
         minimumFractionDigits: 2
       }).format(valor);
     };
+
+    // ========================================
+    // FUNÇÃO PARA GERAR CLÁUSULA DE PAGAMENTO DINÂMICA
+    // ========================================
+    function gerarClausulaPagamento(valorNegociado, forma_pagamento, valor_entrada, num_parcelas, valor_parcela, motivo_negociacao, desconto, motivo_desconto, valor_base_negociacao) {
+      let textoNegociacao = '';
+      let textoPagamento = '';
+
+      // Se houver motivo de negociação ou desconto
+      if (motivo_negociacao || (desconto && desconto > 0)) {
+        textoNegociacao = `4.1.1. `;
+        
+        if (desconto && desconto > 0) {
+          textoNegociacao += `O valor originalmente proposto era de ${formatarMoeda(valor_base_negociacao)}. Foi concedido um desconto de ${formatarMoeda(desconto)} (${motivo_desconto || "negociação comercial"}). `;
+        }
+        
+        if (motivo_negociacao) {
+          textoNegociacao += `Motivo da negociação: ${motivo_negociacao}. `;
+        }
+        
+        textoNegociacao += `O valor final acordado é de ${formatarMoeda(valorNegociado)}.\n`;
+      }
+
+      // À vista
+      if (forma_pagamento === 'a_vista') {
+        textoPagamento = `
+4.2. O pagamento será efetuado em parcela única, conforme abaixo:
+   a) 100% (cem por cento) na data de assinatura deste contrato: ${formatarMoeda(valorNegociado)}.
+
+4.2.1. O pagamento à vista confere à CONTRATANTE o desconto já aplicado sobre o valor total, conforme Cláusula 4.1.1.
+`;
+      }
+      // 50/50
+      else if (forma_pagamento === 'cinquenta_cinquenta') {
+        const valorEntrada = valorNegociado * 0.5;
+        const valorFinal = valorNegociado * 0.5;
+        
+        textoPagamento = `
+4.2. O pagamento será efetuado da seguinte forma:
+   a) 50% (cinquenta por cento) na data de assinatura deste contrato: ${formatarMoeda(valorEntrada)};
+   b) 50% (cinquenta por cento) na data de entrega e aceitação do relatório de diagnóstico: ${formatarMoeda(valorFinal)}.
+
+4.2.1. A segunda parcela deverá ser paga em até 5 (cinco) dias úteis após a entrega e aceitação do relatório.
+`;
+      }
+      // Parcelado
+      else if (forma_pagamento === 'parcelado') {
+        const entrada = valor_entrada || (valorNegociado * 0.5);
+        const parcelas = num_parcelas || 3;
+        const valorParcela = valor_parcela || ((valorNegociado - entrada) / parcelas);
+        
+        textoPagamento = `
+4.2. O pagamento será efetuado da seguinte forma:
+   a) Entrada de ${formatarMoeda(entrada)} (${Math.round((entrada/valorNegociado)*100)}% do valor total) na data de assinatura deste contrato;
+   b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcela)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+
+4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
+4.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+`;
+      }
+      // Fallback (caso forma_pagamento não seja reconhecida)
+      else {
+        textoPagamento = `
+4.2. O pagamento será efetuado em parcela única de ${formatarMoeda(valorNegociado)} na data de assinatura deste contrato.
+`;
+      }
+
+      return textoNegociacao + textoPagamento;
+    }
 
     // TEXTO PURO COM FORMATAÇÃO LIMPA
     const contrato = `
@@ -5827,22 +5897,28 @@ CLÁUSULA 4 – VALOR E CONDIÇÕES DE PAGAMENTO
 
 4.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorNegociado)} (${valorNegociado.toLocaleString('pt-BR')} reais).
 
-4.1.1. O valor total estimado para o projeto completo (Fase 1 + Fase 2 + Fase 3) é de ${formatarMoeda(valorOriginalIA)}. O presente contrato refere-se exclusivamente à Fase 1 (Diagnóstico), no valor de ${formatarMoeda(valorNegociado)}, sendo que as Fases 2 e 3 serão objeto de contrato ou aditivo específico, após a conclusão do diagnóstico e com base nos dados reais coletados.
-
-4.2. O pagamento será efetuado em parcela única, na seguinte condição:
-   Data de assinatura: ${formatarMoeda(valorNegociado)}
+${gerarClausulaPagamento(
+  valorNegociado,
+  dados.forma_pagamento || 'cinquenta_cinquenta',
+  dados.valor_entrada,
+  dados.num_parcelas,
+  dados.valor_parcela,
+  dados.motivo_negociacao,
+  dados.desconto,
+  dados.motivo_desconto,
+  dados.valor_base_negociacao || valorNegociado
+)}
 
 4.3. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
    Banco: [BANCO]
    Agência: [AGÊNCIA]
    Conta: [CONTA]
    Titular: NEXUS ENGENHARIA APLICADA
-   CNPJ: [CNPJ DA NEXUS]
 
 4.4. O comprovante de pagamento deverá ser enviado à CONTRATADA por e-mail em até 24 (vinte e quatro) horas após a efetivação, sob pena de suspensão dos serviços até a regularização.
 
 4.5. O atraso no pagamento sujeitará a CONTRATANTE a:
-   a) Multa moratória de 2% (dois por cento) sobre o valor total da parcela em atraso;
+   a) Multa moratória de 2% (dois por cento) sobre o valor da parcela em atraso;
    b) Juros de mora de 1% (um por cento) ao mês, calculados pro rata die;
    c) Correção monetária pelo índice IPCA (Índice de Preços ao Consumidor Amplo), ou outro índice oficial que venha a substituí-lo, contada da data do vencimento até a data do efetivo pagamento.
 
@@ -5996,13 +6072,13 @@ _________________________________
 CONTRATANTE
 ${empresa.nome}
 ${representante.nome}
-[Cargo]
+${representante.cargo}
 
 _________________________________
 CONTRATADA
 NEXUS ENGENHARIA APLICADA
 [SEU NOME]
-[Cargo]
+[SEU CARGO]
 
 TESTEMUNHAS:
 
