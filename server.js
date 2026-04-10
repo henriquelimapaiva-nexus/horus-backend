@@ -285,14 +285,25 @@ function calcularPrecoProjeto(dados) {
   // PASSO 5: DISTRIBUIÇÃO HÍBRIDA
   // ========================================
   const acompanhamentoMinimo = CONFIG_SALARIO.getAcompanhamentoMinimo();
-  
   let acompanhamentoMensal = acompanhamentoMinimo;
   
-  // Para empresas médias/grandes, acompanhamento proporcional
-  if (faturamento > 2000000) {
+  // 🔥 CORREÇÃO: Acompanhamento proporcional ao tamanho do projeto
+  if (precoBase >= 250000) {
+    // Projetos muito grandes (> R$ 250k)
     const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
-    acompanhamentoMensal = Math.max(acompanhamentoMinimo, acompanhamentoProporcional);
+    acompanhamentoMensal = Math.max(20000, acompanhamentoProporcional);
+  } 
+  else if (precoBase >= 100000) {
+    // Projetos grandes (R$ 100k - R$ 250k)
+    const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
+    acompanhamentoMensal = Math.max(8000, acompanhamentoProporcional);
   }
+  else if (precoBase >= 40000) {
+    // Projetos médios (R$ 40k - R$ 100k)
+    const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
+    acompanhamentoMensal = Math.max(4900, acompanhamentoProporcional);
+  }
+  // Projetos pequenos (< R$ 40k) mantém o mínimo de R$ 4.900
   
   return {
     total: precoBase,
