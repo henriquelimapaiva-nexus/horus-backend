@@ -154,6 +154,167 @@ app.get("/", (req, res) => {
 });
 
 // ========================================
+// 💰 CONFIGURAÇÃO DE SALÁRIO MÍNIMO
+// ========================================
+const CONFIG_SALARIO = {
+  valores: {
+    2025: 1518,
+    2026: 1621,
+    2027: 1700  // valor estimado, ajustar quando governo anunciar
+  },
+  
+  getSalarioMinimo() {
+    const anoAtual = new Date().getFullYear();
+    return this.valores[anoAtual] || this.valores[2025];
+  },
+  
+  getAcompanhamentoMinimo() {
+    const salario = this.getSalarioMinimo();
+    // Arredonda para cima na centena mais próxima
+    return Math.ceil(salario * 3 / 100) * 100;
+  }
+};
+
+console.log(`💰 Salário mínimo ${new Date().getFullYear()}: R$ ${CONFIG_SALARIO.getSalarioMinimo()}`);
+console.log(`📊 Acompanhamento mínimo mensal: R$ ${CONFIG_SALARIO.getAcompanhamentoMinimo()}`);
+
+// ========================================
+// 📊 FUNÇÃO: CALCULAR PARCELAS DO DIAGNÓSTICO
+// ========================================
+function calcularParcelasDiagnostico(valorDiagnostico) {
+  const PARCELA_MAXIMA = 5000;
+  const ENTRADA_PERCENTUAL = 50;
+  
+  const valorEntrada = (valorDiagnostico * ENTRADA_PERCENTUAL) / 100;
+  const valorSaldo = valorDiagnostico - valorEntrada;
+  
+  // Se o saldo for zero ou negativo, não há parcelamento
+  if (valorSaldo <= 0) {
+    return {
+      entrada_percentual: ENTRADA_PERCENTUAL,
+      valor_entrada: valorEntrada,
+      num_parcelas: 0,
+      valor_parcela: 0,
+      tem_parcelamento: false
+    };
+  }
+  
+  // Calcular número de parcelas baseado no valor máximo por parcela
+  let numParcelas = Math.ceil(valorSaldo / PARCELA_MAXIMA);
+  numParcelas = Math.min(numParcelas, 12); // máximo 12 parcelas
+  
+  // Calcular valor da parcela (arredondado para cima na centena)
+  let valorParcela = Math.ceil(valorSaldo / numParcelas / 100) * 100;
+  
+  // Ajuste para que a última parcela não seja muito diferente
+  const totalParcelado = numParcelas * valorParcela;
+  if (totalParcelado !== valorSaldo) {
+    const diferenca = valorSaldo - totalParcelado;
+    valorParcela += Math.ceil(diferenca / numParcelas / 100) * 100;
+  }
+  
+  return {
+    entrada_percentual: ENTRADA_PERCENTUAL,
+    valor_entrada: valorEntrada,
+    num_parcelas: numParcelas,
+    valor_parcela: valorParcela,
+    saldo_parcelado: numParcelas * valorParcela,
+    tem_parcelamento: true
+  };
+}
+
+// ========================================
+// 💰 FUNÇÃO: CALCULAR PREÇO DO PROJETO (HÍBRIDO)
+// ========================================
+function calcularPrecoProjeto(dados) {
+  const { 
+    faturamento, 
+    linhas = 1, 
+    urgencia = 'normal', 
+    complexidade = 'media', 
+    acesso_dados = 'imediato', 
+    projeto_piloto = false 
+  } = dados;
+  
+  let precoBase = 0;
+  
+  // ========================================
+  // PASSO 1: DEFINIR FAIXA BASE
+  // ========================================
+  if (faturamento <= 500000) {
+    // Micro empresa: 5% do faturamento, entre R$ 10k e R$ 25k
+    precoBase = faturamento * 0.05;
+    precoBase = Math.max(10000, Math.min(25000, precoBase));
+  } 
+  else if (faturamento <= 2000000) {
+    // Pequena empresa: 4% do faturamento, entre R$ 40k e R$ 65k
+    precoBase = faturamento * 0.04;
+    precoBase = Math.max(40000, Math.min(65000, precoBase));
+  }
+  else if (faturamento <= 10000000) {
+    // Média empresa: 3% do faturamento, entre R$ 100k e R$ 190k
+    precoBase = faturamento * 0.03;
+    precoBase = Math.max(100000, Math.min(190000, precoBase));
+  }
+  else {
+    // Grande empresa: 2.5% do faturamento, mínimo R$ 250k
+    precoBase = Math.max(250000, faturamento * 0.025);
+  }
+  
+  // ========================================
+  // PASSO 2: APLICAR MULTIPLICADORES
+  // ========================================
+  if (urgencia === 'alta') precoBase *= 1.10;
+  if (complexidade === 'alta') precoBase *= 1.15;
+  if (acesso_dados === 'restrito') precoBase *= 1.10;
+  if (projeto_piloto) precoBase *= 0.85;
+  
+  // ========================================
+  // PASSO 3: LINHAS EXTRAS (acima de 2)
+  // ========================================
+  if (linhas > 2) {
+    precoBase += (linhas - 2) * 5000;
+  }
+  
+  // ========================================
+  // PASSO 4: ARREDONDAR PARA MILHAR
+  // ========================================
+  precoBase = Math.round(precoBase / 1000) * 1000;
+  
+  // ========================================
+  // PASSO 5: DISTRIBUIÇÃO HÍBRIDA
+  // ========================================
+  const acompanhamentoMinimo = CONFIG_SALARIO.getAcompanhamentoMinimo();
+  
+  let acompanhamentoMensal = acompanhamentoMinimo;
+  
+  // Para empresas médias/grandes, acompanhamento proporcional
+  if (faturamento > 2000000) {
+    const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
+    acompanhamentoMensal = Math.max(acompanhamentoMinimo, acompanhamentoProporcional);
+  }
+  
+  return {
+    total: precoBase,
+    diagnostico: Math.max(5000, Math.round(precoBase * 0.25 / 1000) * 1000),
+    implementacao: Math.round(precoBase * 0.60 / 1000) * 1000,
+    acompanhamento_mensal: acompanhamentoMensal,
+    participacao_percentual: 20,
+    detalhamento: {
+      faixa: faturamento <= 500000 ? 'Micro' : faturamento <= 2000000 ? 'Pequena' : faturamento <= 10000000 ? 'Média' : 'Grande',
+      percentual_aplicado: faturamento <= 500000 ? '5%' : faturamento <= 2000000 ? '4%' : faturamento <= 10000000 ? '3%' : '2.5%',
+      multiplicadores_aplicados: {
+        urgencia: urgencia === 'alta' ? '+10%' : '0%',
+        complexidade: complexidade === 'alta' ? '+15%' : '0%',
+        acesso_dados: acesso_dados === 'restrito' ? '+10%' : '0%',
+        projeto_piloto: projeto_piloto ? '-15%' : '0%',
+        linhas_extras: linhas > 2 ? `+R$ ${(linhas - 2) * 5000}` : '0'
+      }
+    }
+  };
+}
+
+// ========================================
 // 🏢 MÓDULO: GESTÃO DE EMPRESAS (CLIENTES)
 // ========================================
 
@@ -4823,10 +4984,13 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
  * - projeto_piloto: boolean
  * - tem_viagem: boolean
  */
+// ========================================
+// 🤖 IA DE PRECIFICAÇÃO - VERSÃO HÍBRIDA
+// ========================================
 app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
   try {
     const dados = req.body;
-
+    
     // ========================================
     // VALIDAÇÃO DOS DADOS DE ENTRADA
     // ========================================
@@ -4835,255 +4999,63 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         erro: "Setor e faturamento anual são obrigatórios para precificação." 
       });
     }
-
-    // ========================================
-    // BENCHMARKS POR SETOR (VALORES REALISTAS DE MERCADO - CORRIGIDOS)
-    // ========================================
-    const benchmarks = {
-      automotivo: { 
-        perda_percentual: 0.06,
-        oee_medio: 78, 
-        potencial_melhoria: 0.12,
-        horas_diagnostico_por_linha: 25,
-        horas_implementacao_por_linha: 60,
-        preco_base: 22000
-      },
-      metalurgico: { 
-        perda_percentual: 0.07,
-        oee_medio: 72, 
-        potencial_melhoria: 0.12,
-        horas_diagnostico_por_linha: 28,
-        horas_implementacao_por_linha: 65,
-        preco_base: 20000
-      },
-      alimenticio: { 
-        perda_percentual: 0.05,
-        oee_medio: 82, 
-        potencial_melhoria: 0.10,
-        horas_diagnostico_por_linha: 20,
-        horas_implementacao_por_linha: 50,
-        preco_base: 18000
-      },
-      quimico: { 
-        perda_percentual: 0.06,
-        oee_medio: 80, 
-        potencial_melhoria: 0.11,
-        horas_diagnostico_por_linha: 25,
-        horas_implementacao_por_linha: 60,
-        preco_base: 20000
-      },
-      farmaceutico: { 
-        perda_percentual: 0.04,
-        oee_medio: 85, 
-        potencial_melhoria: 0.08,
-        horas_diagnostico_por_linha: 25,
-        horas_implementacao_por_linha: 60,
-        preco_base: 18000
-      },
-      outros: { 
-        perda_percentual: 0.06,
-        oee_medio: 75, 
-        potencial_melhoria: 0.12,
-        horas_diagnostico_por_linha: 25,
-        horas_implementacao_por_linha: 60,
-        preco_base: 18000
-      }
-    };
-
-    // ========================================
-    // APRENDIZADO: AJUSTAR BENCHMARKS COM DADOS REAIS DE PROJETOS ANTERIORES
-    // ========================================
-    try {
-      const projetosAnteriores = await pool.query(`
-        SELECT 
-          e.segmento as setor,
-          AVG(pl.refugo_pecas) as media_refugo,
-          AVG(pl.microparadas_minutos) as media_microparadas,
-          COUNT(*) as total_projetos
-        FROM perdas_linha pl
-        JOIN linha_produto lp ON lp.id = pl.linha_produto_id
-        JOIN linha_producao l ON l.id = lp.linha_id
-        JOIN empresas e ON e.id = l.empresa_id
-        WHERE e.segmento ILIKE $1
-        GROUP BY e.segmento
-      `, [`%${dados.setor}%`]);
-
-      if (projetosAnteriores.rows.length > 0) {
-        const aprendizado = projetosAnteriores.rows[0];
-        if (aprendizado.media_refugo > 100) {
-          benchmarks[dados.setor].potencial_melhoria += 0.005;
-        }
-        if (aprendizado.media_microparadas > 200) {
-          benchmarks[dados.setor].potencial_melhoria += 0.005;
-        }
-        console.log(`📊 Aprendizado aplicado: ${aprendizado.total_projetos} projetos anteriores do setor ${dados.setor}`);
-      }
-    } catch (err) {
-      console.log("ℹ️ Sem dados históricos para aprendizado ainda.");
-    }
-
-    const benchmark = benchmarks[dados.setor] || benchmarks.outros;
-    const numeroLinhas = Math.max(1, dados.numero_linhas || 1);
-
-    // ========================================
-    // ESTIMAR PERDAS ATUAIS
-    // ========================================
-    const perdaAnualEstimada = dados.faturamento_anual * benchmark.perda_percentual;
-    const perdaMensalEstimada = perdaAnualEstimada / 12;
-
-    // ========================================
-    // AJUSTAR POTENCIAL DE MELHORIA BASEADO NOS PROBLEMAS
-    // ========================================
-    let fatorComplexidade = 1.0;
     
-    if (dados.problemas) {
-      if (dados.problemas.includes('produtividade')) fatorComplexidade += 0.01;
-      if (dados.problemas.includes('qualidade')) fatorComplexidade += 0.01;
-      if (dados.problemas.includes('manutencao')) fatorComplexidade += 0.005;
-      if (dados.problemas.includes('rh')) fatorComplexidade += 0.005;
-    }
+    // Converter faturamento para número
+    const faturamento = parseFloat(dados.faturamento_anual);
+    const numeroLinhas = parseInt(dados.numero_linhas) || 1;
     
-    if (dados.complexidade === 'alta') fatorComplexidade += 0.05;
-    if (dados.complexidade === 'baixa') fatorComplexidade -= 0.03;
-    
-    // Limitar potencial de melhoria entre 5% e 15%
-    let potencialMelhoria = benchmark.potencial_melhoria * fatorComplexidade;
-    potencialMelhoria = Math.min(0.15, Math.max(0.05, potencialMelhoria));
-    
-    const ganhoAnualEstimado = perdaAnualEstimada * potencialMelhoria;
-    const ganhoMensalEstimado = ganhoAnualEstimado / 12;
-
     // ========================================
-    // PREÇO DO PROJETO (BASEADO EM VALOR PARA O CLIENTE)
+    // CALCULAR PREÇO COM NOVA FÓRMULA HÍBRIDA
     // ========================================
+    const precos = calcularPrecoProjeto({
+      faturamento: faturamento,
+      linhas: numeroLinhas,
+      urgencia: dados.urgencia || 'normal',
+      complexidade: dados.complexidade || 'media',
+      acesso_dados: dados.acesso_dados || 'imediato',
+      projeto_piloto: dados.projeto_piloto || false
+    });
     
-    // 1. Preço base = 20% do ganho anual estimado (benchmark de mercado)
-    let precoProjeto = ganhoAnualEstimado * 0.20;
-    
-    // 2. Mínimo para projetos de valor: R$ 30.000
-    if (precoProjeto < 30000) precoProjeto = 30000;
-    
-    // 3. Aplicar fatores de valor agregado (sua expertise + Hórus)
-    const FATOR_FORMACAO = 1.15;      // Engenharia FEI + Pós FGV
-    const FATOR_HORUS = 1.20;         // Plataforma proprietária
-    const FATOR_METODOLOGIA = 1.10;   // Método Nexus comprovado
-    
-    precoProjeto = precoProjeto * FATOR_FORMACAO * FATOR_HORUS * FATOR_METODOLOGIA;
-    
-    // 4. Ajustes por número de linhas (+R$ 5.000 por linha adicional)
-    if (numeroLinhas > 1) {
-      precoProjeto += (numeroLinhas - 1) * 5000;
-    }
-    
-    // 5. Ajustes por complexidade
-    if (dados.complexidade === 'alta') precoProjeto *= 1.15;
-    if (dados.complexidade === 'baixa') precoProjeto *= 0.95;
-    
-    // 6. Ajustes por urgência
-    if (dados.urgencia === 'alta') precoProjeto *= 1.10;
-    if (dados.urgencia === 'baixa') precoProjeto *= 0.95;
-    
-    // 7. Ajuste por acesso a dados (restrito = mais trabalho)
-    if (dados.acesso_dados === 'restrito') precoProjeto *= 1.10;
-    
-    // 8. Projeto piloto (desconto para primeiro cliente)
-    if (dados.projeto_piloto) precoProjeto *= 0.85;
-    
-    // 9. Limitar faixa de preço (mínimo R$ 30.000, máximo R$ 150.000)
-    precoProjeto = Math.min(150000, Math.max(30000, Math.round(precoProjeto / 5000) * 5000));
-
     // ========================================
-    // FAIXA DE NEGOCIAÇÃO (15% para baixo, 30% para cima)
+    // CALCULAR PARCELAS PARA O DIAGNÓSTICO
     // ========================================
-    const precoMinimo = Math.round(precoProjeto * 0.85 / 1000) * 1000;
-    const precoMaximo = Math.round(precoProjeto * 1.3 / 1000) * 1000;
-
+    const parcelas = calcularParcelasDiagnostico(precos.diagnostico);
+    
     // ========================================
-    // PREÇO DA FASE 1 (DIAGNÓSTICO) - 30% DO TOTAL
-    // ========================================
-    let precoFase1 = Math.round(precoProjeto * 0.3 / 1000) * 1000;
-    if (precoFase1 < 4000) precoFase1 = 4000;
-    if (precoFase1 > 15000) precoFase1 = 15000;
-
-    // ========================================
-    // GERAR RESUMO PARA PROPOSTA (SEM ESTIMATIVAS DE GANHO)
-    // ========================================
-    let resumo = `
-📊 ANÁLISE HÓRUS - PROPOSTA PRÉ-DIAGNÓSTICO
-
-Empresa: ${dados.empresa_nome || "Cliente"}
-Setor: ${dados.setor}
-Data: ${new Date().toLocaleDateString('pt-BR')}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 ESCOPO DA FASE 1 (DIAGNÓSTICO)
-
-• Mapeamento do fluxo de valor (VSM) das áreas produtivas
-• Coleta e análise de dados operacionais (tempos de ciclo, disponibilidade, qualidade)
-• Identificação de gargalos e oportunidades de melhoria
-• Elaboração e entrega de relatório técnico contendo diagnóstico e recomendações
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-💰 INVESTIMENTO - FASE 1
-
-• Valor total: R$ ${precoFase1.toLocaleString('pt-BR')}
-• Forma de pagamento: 100% na assinatura (ou conforme negociado)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 PRÓXIMOS PASSOS
-
-1. Assinar contrato e iniciar diagnóstico
-2. Coletar dados reais com a plataforma Hórus
-3. Receber relatório técnico com diagnóstico e oportunidades identificadas
-4. Após o diagnóstico, apresentaremos proposta para a Fase 2 (Implementação) e Fase 3 (Acompanhamento), com preços baseados nos dados reais coletados
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-⚠️ IMPORTANTE
-
-• Este contrato cobre exclusivamente a Fase 1 (Diagnóstico)
-• As estimativas de ganho e ROI serão fornecidas APÓS a coleta de dados reais
-• A CONTRATADA não garante percentuais específicos de melhoria antes do diagnóstico
-• Os resultados dependem da implementação das recomendações pela CONTRATANTE
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Esta proposta é válida por 15 dias.
-
-Atenciosamente,
-
-Nexus Engenharia Aplicada
-    `;
-
-    // ========================================
-    // RETORNAR RESULTADO (SEM ESTIMATIVAS DE GANHO)
+    // RETORNAR RESULTADO
     // ========================================
     res.status(200).json({
       status: "sucesso",
+      versao: "hibrida",
       empresa: dados.empresa_nome || "Cliente",
+      setor: dados.setor,
       data_calculo: new Date().toISOString(),
       
       precos: {
-        minimo: precoMinimo,
-        ideal: precoProjeto,
-        maximo: precoMaximo,
-        fase1: precoFase1
+        total_projeto: precos.total,
+        diagnostico: precos.diagnostico,
+        implementacao: precos.implementacao,
+        acompanhamento_mensal: precos.acompanhamento_mensal,
+        participacao_percentual: precos.participacao_percentual
       },
       
-      resumo: resumo,
+      parcelamento: {
+        disponivel: parcelas.tem_parcelamento,
+        entrada_percentual: parcelas.entrada_percentual,
+        valor_entrada: parcelas.valor_entrada,
+        num_parcelas: parcelas.num_parcelas,
+        valor_parcela: parcelas.valor_parcela,
+        valor_total_parcelado: parcelas.saldo_parcelado
+      },
       
-      dados_para_proposta: {
-        empresa: dados.empresa_nome,
-        honorarios: precoProjeto,
-        fase1: precoFase1,
-        setor: dados.setor,
-        linhas: numeroLinhas
+      detalhamento: precos.detalhamento,
+      
+      configuracao: {
+        salario_minimo_atual: CONFIG_SALARIO.getSalarioMinimo(),
+        acompanhamento_minimo_mensal: CONFIG_SALARIO.getAcompanhamentoMinimo()
       }
     });
-
+    
   } catch (error) {
     console.error("❌ Erro na IA de Precificação:", error.message);
     res.status(500).json({ 
