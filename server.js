@@ -5839,7 +5839,7 @@ As partes, acima identificadas, têm entre si justo e contratado o seguinte:
 CLÁUSULA 1 – OBJETO
 -------------------------------------------------------------------------------
 
-1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, limitados à Fase 1 – Diagnóstico, conforme descrito no Anexo I, que passa a fazer parte integrante deste instrumento.
+1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, limitados à Fase 1 – Diagnóstico, com foco na identificação de oportunidades de ganho de produtividade, eficiência operacional e redução de custos industriais, conforme descrito no Anexo I, que passa a fazer parte integrante deste instrumento.
 
 1.2. A Fase 1 compreende exclusivamente:
    a) Mapeamento do fluxo de valor (VSM) das áreas produtivas indicadas pela CONTRATANTE;
@@ -5892,6 +5892,14 @@ CLÁUSULA 3 – OBRIGAÇÕES DA CONTRATANTE
 3.7. A CONTRATANTE declara estar ciente de que os resultados do diagnóstico dependem diretamente da qualidade e veracidade das informações fornecidas, assumindo integral responsabilidade por eventuais imprecisões ou omissões.
 
 -------------------------------------------------------------------------------
+CLÁUSULA 3-A – AUTORIDADE TÉCNICA DA CONTRATADA
+-------------------------------------------------------------------------------
+
+3-A.1. A CONTRATANTE reconhece que a CONTRATADA atua como especialista técnico independente, sendo responsável apenas pela análise, diagnóstico e recomendação técnica, cabendo exclusivamente à CONTRATANTE a decisão soberana sobre a implementação ou não das ações sugeridas.
+
+3-A.2. A CONTRATADA não se responsabiliza por decisões tomadas pela CONTRATANTE com base no diagnóstico, bem como pelos resultados ou consequências decorrentes da não implementação total ou parcial das recomendações apresentadas.
+
+-------------------------------------------------------------------------------
 CLÁUSULA 4 – VALOR E CONDIÇÕES DE PAGAMENTO
 -------------------------------------------------------------------------------
 
@@ -5924,15 +5932,17 @@ ${gerarClausulaPagamento(
 
 4.6. Em caso de inadimplemento, a CONTRATADA poderá suspender imediatamente a execução dos serviços até a regularização do pagamento, sem prejuízo da cobrança dos encargos previstos.
 
+4.7. A ausência de pagamento na data acordada implica no não início dos serviços, não sendo reservada agenda, cronograma ou equipe técnica pela CONTRATADA, ficando a CONTRATANTE sujeita à realocação da disponibilidade da CONTRATADA em sua agenda.
+
 -------------------------------------------------------------------------------
 CLÁUSULA 5 – PRAZO E VIGÊNCIA
 -------------------------------------------------------------------------------
 
-5.1. O presente contrato terá vigência de ${prazos.meses_vigencia} meses, contados da data de assinatura, ou até a entrega do relatório de diagnóstico, o que ocorrer primeiro.
+5.1. O presente contrato terá vigência de ${prazos.meses_vigencia === 1 ? '1 mês' : prazos.meses_vigencia + ' meses'}, contados da data de assinatura, ou até a entrega do relatório de diagnóstico, o que ocorrer primeiro.
 
 5.2. O início dos serviços está condicionado ao pagamento da parcela prevista na Cláusula 4.2 e à disponibilização das informações e acessos previstos na Cláusula 3.
 
-5.3. O prazo para entrega do relatório de diagnóstico é de ${prazos.prazo_entrega_semanas} semanas, contadas da data de início efetivo dos serviços.
+5.3. O prazo para entrega do relatório de diagnóstico é de 3 (três) semanas, contadas da data de início efetivo dos serviços.
 
 -------------------------------------------------------------------------------
 CLÁUSULA 6 – PROPRIEDADE INTELECTUAL
@@ -5962,7 +5972,7 @@ CLÁUSULA 7 – CONFIDENCIALIDADE
 
 7.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término deste contrato.
 
-7.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento de violação, sem prejuízo das perdas e danos e demais sanções cabíveis.
+7.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 3 (três) vezes o valor total deste contrato, sem prejuízo das perdas e danos e demais sanções cabíveis.
 
 7.4. Não se considera violação da confidencialidade a divulgação de informações:
    a) Exigidas por determinação judicial ou legal;
@@ -5978,7 +5988,7 @@ CLÁUSULA 8 – RESCISÃO
    b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias, sem justa causa;
    c) Por caso fortuito ou força maior que impeça a execução do objeto, assim reconhecido judicialmente.
 
-8.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 4.1.
+8.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 4.1. Caso a rescisão ocorra após o início dos serviços, serão devidos os valores proporcionais às atividades já executadas, não sendo cabível reembolso integral dos valores pagos.
 
 8.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá à CONTRATANTE os valores já pagos, atualizados monetariamente, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato.
 
@@ -6013,10 +6023,18 @@ CLÁUSULA 10 – DISPOSIÇÕES GERAIS
 10.5. Os títulos das cláusulas são meramente descritivos e não vinculam a interpretação do contrato.
 
 -------------------------------------------------------------------------------
-CLÁUSULA 11 – FORO
+CLÁUSULA 11 – LIMITAÇÃO DE RESPONSABILIDADE
 -------------------------------------------------------------------------------
 
-11.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
+11.1. A responsabilidade total da CONTRATADA, independentemente da natureza da reclamação ou da teoria jurídica aplicável, fica limitada ao valor total pago pela CONTRATANTE nos últimos 12 (doze) meses, nunca excedendo o valor total deste contrato.
+
+11.2. Em nenhuma hipótese a CONTRATADA será responsável por danos indiretos, lucros cessantes, perda de faturamento, perda de clientes, perda de oportunidades de negócio, danos à imagem ou reputação, ou qualquer outro dano consequencial.
+
+-------------------------------------------------------------------------------
+CLÁUSULA 12 – FORO
+-------------------------------------------------------------------------------
+
+12.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
 
 -------------------------------------------------------------------------------
 ANEXO I – ESCOPO DETALHADO DA FASE 1 (DIAGNÓSTICO)
@@ -6056,7 +6074,7 @@ ANEXO I – ESCOPO DETALHADO DA FASE 1 (DIAGNÓSTICO)
 
 3. PRAZOS
 
-3.1. O prazo para execução da Fase 1 é de ${prazos.semanas_diagnostico} semanas, contadas da data de início efetivo dos serviços, conforme Cláusula 5.3.
+3.1. O prazo para execução da Fase 1 é de 3 (três) semanas, contadas da data de início efetivo dos serviços, conforme Cláusula 5.3.
 
 3.2. O cronograma detalhado será apresentado na reunião de abertura e poderá ser ajustado por acordo entre as partes.
 
