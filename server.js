@@ -5784,7 +5784,7 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
 4.2. O pagamento será efetuado em parcela única, conforme abaixo:
    a) 100% (cem por cento) na data de assinatura deste contrato: ${formatarMoeda(valorNegociado)}.
 
-4.2.1. O pagamento à vista confere à CONTRATANTE o desconto já aplicado sobre o valor total, conforme Cláusula 4.1.1.
+4.2.1. O pagamento à vista confere à CONTRATANTE o desconto já aplicado sobre o valor total, conforme condições comerciais acordadas entre as partes.
 `;
       }
       // 50/50
@@ -5858,6 +5858,8 @@ CLÁUSULA 1 – OBJETO
 CLÁUSULA 2 – OBRIGAÇÕES DA CONTRATADA
 -------------------------------------------------------------------------------
 
+A CONTRATANTE reconhece que a CONTRATADA possui metodologia própria e especializada para execução dos serviços, não cabendo interferência direta na condução técnica das atividades.
+
 2.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis, observando os padrões éticos e técnicos da profissão.
 
 2.2. Fornecer equipe técnica qualificada e compatível com a natureza dos serviços, sendo a CONTRATADA a única responsável pela sua seleção, supervisão e remuneração.
@@ -5895,7 +5897,7 @@ CLÁUSULA 3 – OBRIGAÇÕES DA CONTRATANTE
 CLÁUSULA 3-A – AUTORIDADE TÉCNICA DA CONTRATADA
 -------------------------------------------------------------------------------
 
-3-A.1. A CONTRATANTE reconhece que a CONTRATADA atua como especialista técnico independente, sendo responsável apenas pela análise, diagnóstico e recomendação técnica, cabendo exclusivamente à CONTRATANTE a decisão soberana sobre a implementação ou não das ações sugeridas.
+3-A.1. A CONTRATANTE reconhece que a CONTRATADA atua como especialista técnico independente, sendo responsável apenas pela análise, diagnóstico e recomendação técnica, cabendo exclusivamente à CONTRATANTE a decisão exclusiva e de sua inteira responsabilidade sobre a implementação ou não das ações sugeridas.
 
 3-A.2. A CONTRATADA não se responsabiliza por decisões tomadas pela CONTRATANTE com base no diagnóstico, bem como pelos resultados ou consequências decorrentes da não implementação total ou parcial das recomendações apresentadas.
 
@@ -5938,7 +5940,7 @@ ${gerarClausulaPagamento(
 CLÁUSULA 5 – PRAZO E VIGÊNCIA
 -------------------------------------------------------------------------------
 
-5.1. O presente contrato terá vigência de ${prazos.meses_vigencia === 1 ? '1 mês' : prazos.meses_vigencia + ' meses'}, contados da data de assinatura, ou até a entrega do relatório de diagnóstico, o que ocorrer primeiro.
+5.1. O presente contrato terá vigência de ${prazos.meses_vigencia === 1 ? '1 (um) mês' : prazos.meses_vigencia + ' meses'}, contados da data de assinatura, podendo ser automaticamente estendido até a conclusão integral dos serviços previstos neste contrato.
 
 5.2. O início dos serviços está condicionado ao pagamento da parcela prevista na Cláusula 4.2 e à disponibilização das informações e acessos previstos na Cláusula 3.
 
@@ -5947,6 +5949,8 @@ CLÁUSULA 5 – PRAZO E VIGÊNCIA
 -------------------------------------------------------------------------------
 CLÁUSULA 6 – PROPRIEDADE INTELECTUAL
 -------------------------------------------------------------------------------
+
+A execução dos serviços poderá envolver o uso da plataforma proprietária Hórus, desenvolvida pela CONTRATADA, a qual constitui diferencial competitivo e ativo estratégico exclusivo, sendo vedado qualquer tipo de acesso, reprodução ou tentativa de engenharia reversa.
 
 6.1. Toda a metodologia, know-how, softwares, sistemas (incluindo, mas não se limitando, à plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos, materiais de treinamento e quaisquer outros ativos intelectuais desenvolvidos ou utilizados pela CONTRATADA na execução dos serviços são de sua propriedade exclusiva, constituindo segredo de negócio.
 
