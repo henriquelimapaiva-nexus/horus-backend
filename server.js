@@ -6060,29 +6060,35 @@ E, por estarem assim justas e contratadas, as partes assinam o presente instrume
 
 ${empresa.cidade}, ${dataAssinatura}.
 
-_________________________________
-CONTRATANTE
-${empresa.nome}
-${representante.nome}
-${representante.cargo}
+<div class="grid-assinaturas-print">
+  <div class="campo-assinatura">
+    <div class="linha-assinatura"></div>
+    <strong>CONTRATANTE</strong><br/>
+    ${empresa.nome}<br/>
+    ${representante.nome}<br/>
+    ${representante.cargo}
+  </div>
 
-_________________________________
-CONTRATADA
-NEXUS ENGENHARIA APLICADA
-[SEU NOME]
-[SEU CARGO]
+  <div class="campo-assinatura">
+    <div class="linha-assinatura"></div>
+    <strong>CONTRATADA</strong><br/>
+    NEXUS ENGENHARIA APLICADA<br/>
+    [SEU NOME]<br/>
+    [SEU CARGO]
+  </div>
+</div>
 
-TESTEMUNHAS:
-
-1. _________________________________
-   Nome: _______________________________
-   RG: _______________________________
-   CPF: _______________________________
-
-2. _________________________________
-   Nome: _______________________________
-   RG: _______________________________
-   CPF: _______________________________
+<div class="testemunhas-print">
+  <p><strong>TESTEMUNHAS:</strong></p>
+  <div class="linha-testemunha">
+    <span>1. _______________________________</span>
+    <span>Nome: __________________________</span>
+  </div>
+  <div class="linha-testemunha">
+    <span>2. _______________________________</span>
+    <span>Nome: __________________________</span>
+  </div>
+</div>
 `;
 
     res.status(200).json({
