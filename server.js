@@ -6078,15 +6078,23 @@ ${empresa.cidade}, ${dataAssinatura}.
   </div>
 </div>
 
-<div class="testemunhas-print">
-  <p><strong>TESTEMUNHAS:</strong></p>
-  <div class="linha-testemunha">
-    <span>1. _______________________________</span>
-    <span>Nome: __________________________</span>
-  </div>
-  <div class="linha-testemunha">
-    <span>2. _______________________________</span>
-    <span>Nome: __________________________</span>
+<div class="testemunhas-print" style="margin-top: 40px; page-break-inside: avoid;">
+  <p style="margin-bottom: 20px;"><strong>TESTEMUNHAS:</strong></p>
+  
+  <div style="display: flex; gap: 50px;">
+    <div style="flex: 1;">
+      <div style="border-top: 1px solid #000; margin-bottom: 5px; width: 100%;"></div>
+      <p style="margin: 0; font-size: 10pt;">1. Nome: __________________________</p>
+      <p style="margin: 0; font-size: 10pt;">RG: _____________________________</p>
+      <p style="margin: 0; font-size: 10pt;">CPF: ____________________________</p>
+    </div>
+
+    <div style="flex: 1;">
+      <div style="border-top: 1px solid #000; margin-bottom: 5px; width: 100%;"></div>
+      <p style="margin: 0; font-size: 10pt;">2. Nome: __________________________</p>
+      <p style="margin: 0; font-size: 10pt;">RG: _____________________________</p>
+      <p style="margin: 0; font-size: 10pt;">CPF: ____________________________</p>
+    </div>
   </div>
 </div>
 `;
