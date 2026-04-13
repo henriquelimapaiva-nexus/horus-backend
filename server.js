@@ -6178,7 +6178,6 @@ ${empresa.cidade}, ${dataAssinatura}.
       detalhe: error.message 
     });
   }
-});
 
     // ========================================
     // 💾 SALVAR CONTRATO DA FASE 1 NO BANCO
@@ -6230,6 +6229,7 @@ ${empresa.cidade}, ${dataAssinatura}.
     } catch (saveError) {
       console.error("❌ Erro ao salvar contrato:", saveError.message);
     }
+  });
 
 // ========================================
 // 📄 CONTRATO FASE 2+3 (IMPLEMENTAÇÃO + ACOMPANHAMENTO)
