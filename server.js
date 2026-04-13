@@ -6148,21 +6148,23 @@ ANEXO I – ESCOPO DETALHADO DA FASE 1 (DIAGNÓSTICO)
 
 ASSINATURAS
 
+ASSINATURAS
+
 E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
 
-${empresa.cidade}, ${dataAssinatura}.
+${empresa.cidade || '[CIDADE]'}, ${dataAssinatura}.
 
-<div class="grid-assinaturas-print">
-  <div class="campo-assinatura">
-    <div class="linha-assinatura"></div>
+<div style="display: flex; justify-content: space-between; gap: 40px; margin-top: 30px;">
+  <div style="flex: 1; text-align: center;">
+    <div style="border-top: 1px solid #000; margin: 15px 0 8px 0;"></div>
     <strong>CONTRATANTE</strong><br/>
     ${empresa.nome}<br/>
     ${representante.nome}<br/>
     ${representante.cargo}
   </div>
 
-  <div class="campo-assinatura">
-    <div class="linha-assinatura"></div>
+  <div style="flex: 1; text-align: center;">
+    <div style="border-top: 1px solid #000; margin: 15px 0 8px 0;"></div>
     <strong>CONTRATADA</strong><br/>
     NEXUS ENGENHARIA APLICADA<br/>
     [SEU NOME]<br/>
@@ -6170,24 +6172,22 @@ ${empresa.cidade}, ${dataAssinatura}.
   </div>
 </div>
 
-<div class="testemunhas-print" style="margin-top: 40px; page-break-inside: avoid;">
-  <p style="margin-bottom: 30px;"><strong>TESTEMUNHAS:</strong></p>
+<div style="margin-top: 40px;">
+  <p><strong>TESTEMUNHAS:</strong></p>
   
-  <div style="display: flex; gap: 60px;">
+  <div style="display: flex; gap: 40px; margin-top: 15px;">
     <div style="flex: 1;">
-      <div style="border-top: 1px solid #000; margin-bottom: 8px; width: 100%;"></div>
-      <p style="margin: 0; font-size: 9pt; color: #444;">Assinatura da Testemunha 1</p>
-      <p style="margin: 10px 0 0 0; font-size: 10pt;">Nome: __________________________</p>
-      <p style="margin: 5px 0 0 0; font-size: 10pt;">RG: _____________________________</p>
-      <p style="margin: 5px 0 0 0; font-size: 10pt;">CPF: ____________________________</p>
+      <div style="border-top: 1px solid #000; margin-bottom: 8px;"></div>
+      <p style="margin: 5px 0;">Nome: __________________________</p>
+      <p style="margin: 5px 0;">RG: _____________________________</p>
+      <p style="margin: 5px 0;">CPF: ____________________________</p>
     </div>
 
     <div style="flex: 1;">
-      <div style="border-top: 1px solid #000; margin-bottom: 8px; width: 100%;"></div>
-      <p style="margin: 0; font-size: 9pt; color: #444;">Assinatura da Testemunha 2</p>
-      <p style="margin: 10px 0 0 0; font-size: 10pt;">Nome: __________________________</p>
-      <p style="margin: 5px 0 0 0; font-size: 10pt;">RG: _____________________________</p>
-      <p style="margin: 5px 0 0 0; font-size: 10pt;">CPF: ____________________________</p>
+      <div style="border-top: 1px solid #000; margin-bottom: 8px;"></div>
+      <p style="margin: 5px 0;">Nome: __________________________</p>
+      <p style="margin: 5px 0;">RG: _____________________________</p>
+      <p style="margin: 5px 0;">CPF: ____________________________</p>
     </div>
   </div>
 </div>
