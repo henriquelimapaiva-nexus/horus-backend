@@ -5699,6 +5699,64 @@ app.get("/api/rh/habilidades/colaborador/:colaboradorId", autenticarToken, async
 });
 
 // ========================================
+// 📊 BUSCAR VALORES DA FASE 1 POR EMPRESA
+// ========================================
+app.get("/api/projeto/valores/:empresaId", autenticarToken, async (req, res) => {
+  try {
+    const { empresaId } = req.params;
+
+    const query = `
+      SELECT 
+        valor_total_projeto,
+        valor_fase1_diagnostico,
+        data_assinatura,
+        status
+      FROM contratos_fase1
+      WHERE empresa_id = $1
+      ORDER BY data_assinatura DESC
+      LIMIT 1
+    `;
+
+    const result = await pool.query(query, [empresaId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        erro: "Nenhum contrato da Fase 1 encontrado para esta empresa" 
+      });
+    }
+
+    const contrato = result.rows[0];
+    const valorTotalProjeto = parseFloat(contrato.valor_total_projeto);
+    const valorFase1 = parseFloat(contrato.valor_fase1_diagnostico);
+    const saldoFase2e3 = valorTotalProjeto - valorFase1;
+    
+    const valorImplementacao = Math.round(valorTotalProjeto * 0.60);
+    const valorAcompanhamentoMensal = Math.round((valorTotalProjeto * 0.15) / 12);
+
+    res.json({
+      sucesso: true,
+      dados: {
+        empresa_id: parseInt(empresaId),
+        valor_total_projeto: valorTotalProjeto,
+        valor_fase1: valorFase1,
+        saldo_fase2e3: saldoFase2e3,
+        valor_implementacao: valorImplementacao,
+        valor_acompanhamento_mensal: valorAcompanhamentoMensal,
+        data_contrato_fase1: contrato.data_assinatura,
+        status_fase1: contrato.status
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao buscar valores da Fase 1:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao buscar valores do projeto",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 📄 CONTRATO PRÉ-DIAGNÓSTICO (FASE 1)
 // ========================================
 
@@ -6121,6 +6179,57 @@ ${empresa.cidade}, ${dataAssinatura}.
     });
   }
 });
+
+    // ========================================
+    // 💾 SALVAR CONTRATO DA FASE 1 NO BANCO
+    // ========================================
+    try {
+      const valorTotalProjeto = dados.valor_base_negociacao || valorNegociado;
+      const valorFase1 = valorNegociado;
+      
+      let empresaId = null;
+      
+      // Tentar buscar empresa pelo nome
+      if (dados.empresa && dados.empresa.nome) {
+        const empresaBusca = await pool.query(
+          "SELECT id FROM empresas WHERE nome ILIKE $1 LIMIT 1",
+          [dados.empresa.nome]
+        );
+        if (empresaBusca.rows.length > 0) {
+          empresaId = empresaBusca.rows[0].id;
+        }
+      }
+      
+      if (empresaId) {
+        await pool.query(`
+          INSERT INTO contratos_fase1 (
+            empresa_id, 
+            valor_total_projeto, 
+            valor_fase1_diagnostico,
+            forma_pagamento,
+            num_parcelas,
+            status,
+            data_assinatura,
+            created_by
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [
+          empresaId,
+          valorTotalProjeto,
+          valorFase1,
+          dados.forma_pagamento || 'cinquenta_cinquenta',
+          dados.num_parcelas || 0,
+          'assinado',
+          dados.data_assinatura || new Date().toISOString().split('T')[0],
+          req.usuario.id
+        ]);
+        
+        console.log(`✅ Contrato Fase 1 salvo - Empresa ID: ${empresaId}`);
+      } else {
+        console.log(`⚠️ Não foi possível salvar contrato: empresa não encontrada - ${dados.empresa?.nome}`);
+      }
+    } catch (saveError) {
+      console.error("❌ Erro ao salvar contrato:", saveError.message);
+    }
 
 // ========================================
 // 📄 CONTRATO FASE 2+3 (IMPLEMENTAÇÃO + ACOMPANHAMENTO)
