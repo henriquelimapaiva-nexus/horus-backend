@@ -6159,26 +6159,6 @@ ${empresa.cidade}, ${dataAssinatura}.
 </div>
 `;
 
-    res.status(200).json({
-      status: "sucesso",
-      contrato: contrato,
-      metadata: {
-        empresa: empresa.nome,
-        valor_negociado: valorNegociado,
-        valor_original_ia: valorOriginalIA,
-        data_geracao: new Date().toISOString(),
-        tipo: "pre-diagnostico"
-      }
-    });
-
-  } catch (error) {
-    console.error("❌ Erro ao gerar contrato pré-diagnóstico:", error.message);
-    res.status(500).json({ 
-      erro: "Falha ao gerar contrato",
-      detalhe: error.message 
-    });
-  }
-
     // ========================================
     // 💾 SALVAR CONTRATO DA FASE 1 NO BANCO
     // ========================================
@@ -6229,7 +6209,27 @@ ${empresa.cidade}, ${dataAssinatura}.
     } catch (saveError) {
       console.error("❌ Erro ao salvar contrato:", saveError.message);
     }
-  });
+
+    res.status(200).json({
+      status: "sucesso",
+      contrato: contrato,
+      metadata: {
+        empresa: empresa.nome,
+        valor_negociado: valorNegociado,
+        valor_original_ia: valorOriginalIA,
+        data_geracao: new Date().toISOString(),
+        tipo: "pre-diagnostico"
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao gerar contrato pré-diagnóstico:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao gerar contrato",
+      detalhe: error.message 
+    });
+  }
+});
 
 // ========================================
 // 📄 CONTRATO FASE 2+3 (IMPLEMENTAÇÃO + ACOMPANHAMENTO)
