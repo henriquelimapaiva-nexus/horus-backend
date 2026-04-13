@@ -5762,9 +5762,9 @@ app.get("/api/projeto/valores/:empresaId", autenticarToken, async (req, res) => 
     const valorFase1 = parseFloat(contrato.valor_fase1_diagnostico);
     const saldoFase2e3 = valorTotalProjeto - valorFase1;
     
-    const valorImplementacao = Math.round(saldoFase2e3 * 0.8);
-    const valorAcompanhamentoTotal = Math.round(saldoFase2e3 * 0.2);
-    const MESES_ACOMPANHAMENTO = 6;
+    const valorImplementacao = Math.round(valorTotalProjeto * 0.50);
+    const valorAcompanhamentoTotal = Math.round(valorTotalProjeto * 0.25);
+    const MESES_ACOMPANHAMENTO = 3;
     const valorAcompanhamentoMensal = Math.round(valorAcompanhamentoTotal / MESES_ACOMPANHAMENTO);
 
     res.json({
@@ -6270,9 +6270,9 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
     const saldoFase2e3 = valorTotalProjeto - valorFase1;
     
     // Distribuição: 80% para Implementação, 20% para Acompanhamento
-    const valorImplementacao = Math.round(saldoFase2e3 * 0.8);
-    const valorAcompanhamentoTotal = Math.round(saldoFase2e3 * 0.2);
-    const MESES_ACOMPANHAMENTO = 6; // padrão
+    const valorImplementacao = Math.round(valorTotalProjeto * 0.50);
+    const valorAcompanhamentoTotal = Math.round(valorTotalProjeto * 0.25);
+    const MESES_ACOMPANHAMENTO = 3; // padrão
     const valorAcompanhamentoMensal = Math.round(valorAcompanhamentoTotal / MESES_ACOMPANHAMENTO);
     
     // ========================================
