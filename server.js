@@ -416,6 +416,38 @@ app.post("/api/companies", autenticarToken, async (req, res) => {
     `;
 
     const result = await pool.query(query, values);
+    
+    // ========================================
+    // 💾 VINCULAR CONTRATO DA FASE 1 (SE EXISTIR)
+    // ========================================
+    try {
+      // Buscar contrato da Fase 1 pelo nome da empresa
+      const contratoExistente = await pool.query(`
+        SELECT id, valor_total_projeto, valor_fase1_diagnostico, forma_pagamento, num_parcelas
+        FROM contratos_fase1 
+        WHERE empresa_nome = $1 AND empresa_id IS NULL
+        ORDER BY id DESC 
+        LIMIT 1
+      `, [nome.trim()]);
+
+      if (contratoExistente.rows.length > 0) {
+        const contrato = contratoExistente.rows[0];
+        
+        // Atualizar o contrato com o empresa_id correto
+        await pool.query(`
+          UPDATE contratos_fase1 
+          SET empresa_id = $1 
+          WHERE id = $2
+        `, [result.rows[0].id, contrato.id]);
+        
+        console.log(`✅ Contrato Fase 1 vinculado à empresa: ${nome} (ID: ${result.rows[0].id})`);
+      } else {
+        console.log(`ℹ️ Nenhum contrato da Fase 1 pendente para empresa: ${nome}`);
+      }
+    } catch (saveError) {
+      console.error("❌ Erro ao vincular contrato:", saveError.message);
+    }
+    
     res.status(201).json(result.rows[0]);
 
   } catch (error) {
@@ -6158,57 +6190,6 @@ ${empresa.cidade}, ${dataAssinatura}.
   </div>
 </div>
 `;
-
-    // ========================================
-    // 💾 SALVAR CONTRATO DA FASE 1 NO BANCO
-    // ========================================
-    try {
-      const valorTotalProjeto = dados.valor_base_negociacao || valorNegociado;
-      const valorFase1 = valorNegociado;
-      
-      let empresaId = null;
-      
-      // Tentar buscar empresa pelo nome
-      if (dados.empresa && dados.empresa.nome) {
-        const empresaBusca = await pool.query(
-          "SELECT id FROM empresas WHERE nome ILIKE $1 LIMIT 1",
-          [dados.empresa.nome]
-        );
-        if (empresaBusca.rows.length > 0) {
-          empresaId = empresaBusca.rows[0].id;
-        }
-      }
-      
-      if (empresaId) {
-        await pool.query(`
-          INSERT INTO contratos_fase1 (
-            empresa_id, 
-            valor_total_projeto, 
-            valor_fase1_diagnostico,
-            forma_pagamento,
-            num_parcelas,
-            status,
-            data_assinatura,
-            created_by
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        `, [
-          empresaId,
-          valorTotalProjeto,
-          valorFase1,
-          dados.forma_pagamento || 'cinquenta_cinquenta',
-          dados.num_parcelas || 0,
-          'assinado',
-          dados.data_assinatura || new Date().toISOString().split('T')[0],
-          req.usuario.id
-        ]);
-        
-        console.log(`✅ Contrato Fase 1 salvo - Empresa ID: ${empresaId}`);
-      } else {
-        console.log(`⚠️ Não foi possível salvar contrato: empresa não encontrada - ${dados.empresa?.nome}`);
-      }
-    } catch (saveError) {
-      console.error("❌ Erro ao salvar contrato:", saveError.message);
-    }
 
     res.status(200).json({
       status: "sucesso",
