@@ -5762,8 +5762,10 @@ app.get("/api/projeto/valores/:empresaId", autenticarToken, async (req, res) => 
     const valorFase1 = parseFloat(contrato.valor_fase1_diagnostico);
     const saldoFase2e3 = valorTotalProjeto - valorFase1;
     
-    const valorImplementacao = Math.round(valorTotalProjeto * 0.60);
-    const valorAcompanhamentoMensal = Math.round((valorTotalProjeto * 0.15) / 12);
+    const valorImplementacao = Math.round(saldoFase2e3 * 0.8);
+    const valorAcompanhamentoTotal = Math.round(saldoFase2e3 * 0.2);
+    const MESES_ACOMPANHAMENTO = 6;
+    const valorAcompanhamentoMensal = Math.round(valorAcompanhamentoTotal / MESES_ACOMPANHAMENTO);
 
     res.json({
       sucesso: true,
