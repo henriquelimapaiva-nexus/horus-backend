@@ -6224,7 +6224,9 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
       return res.status(400).json({ erro: "ID da empresa é obrigatório" });
     }
 
-    // Buscar dados da empresa
+    // ========================================
+    // 1️⃣ BUSCAR DADOS DA EMPRESA
+    // ========================================
     const empresaRes = await pool.query(
       "SELECT * FROM empresas WHERE id = $1",
       [dados.empresa_id]
@@ -6236,62 +6238,53 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
 
     const empresa = empresaRes.rows[0];
 
-    // Buscar dados para gerar resultados esperados
-    const linhasRes = await pool.query(
-      "SELECT * FROM linhas_producao WHERE empresa_id = $1",
-      [dados.empresa_id]
-    );
-    const linhas = linhasRes.rows;
+    // ========================================
+    // 2️⃣ BUSCAR CONTRATO DA FASE 1
+    // ========================================
+    const contratoFase1Res = await pool.query(`
+      SELECT 
+        valor_total_projeto,
+        valor_fase1_diagnostico
+      FROM contratos_fase1
+      WHERE empresa_id = $1
+      ORDER BY data_assinatura DESC
+      LIMIT 1
+    `, [dados.empresa_id]);
 
-    let oeeAtual = 0;
-    let perdasTotais = 0;
-    let setupMaior = 0;
-    let totalPostos = 0;
-
-    for (const linha of linhas) {
-      const analiseRes = await pool.query(
-        "SELECT eficiencia_percentual FROM analise_linha WHERE linha_id = $1 ORDER BY data_analise DESC LIMIT 1",
-        [linha.id]
-      );
-      if (analiseRes.rows.length > 0) {
-        oeeAtual += parseFloat(analiseRes.rows[0].eficiencia_percentual);
-      }
-
-      const postosRes = await pool.query(
-        "SELECT * FROM posto_trabalho WHERE linha_id = $1",
-        [linha.id]
-      );
-      totalPostos += postosRes.rows.length;
-
-      for (const posto of postosRes.rows) {
-        if (posto.tempo_setup_minutos > setupMaior) {
-          setupMaior = posto.tempo_setup_minutos;
-        }
-        if (posto.cargo_id) {
-          const cargoRes = await pool.query(
-            "SELECT salario_base, encargos_percentual FROM cargos WHERE id = $1",
-            [posto.cargo_id]
-          );
-          if (cargoRes.rows.length > 0) {
-            const cargo = cargoRes.rows[0];
-            const salario = parseFloat(cargo.salario_base) || 0;
-            const encargos = parseFloat(cargo.encargos_percentual) || 70;
-            const custoMensal = salario * (1 + encargos / 100);
-            perdasTotais += custoMensal * 0.2;
-          }
-        }
-      }
+    if (contratoFase1Res.rows.length === 0) {
+      return res.status(404).json({ 
+        erro: "Nenhum contrato da Fase 1 encontrado para esta empresa",
+        mensagem: "É necessário ter o contrato de Diagnóstico (Fase 1) assinado antes de prosseguir."
+      });
     }
 
-    oeeAtual = linhas.length > 0 ? oeeAtual / linhas.length : 0;
-    const metaOEE = Math.min(85, Math.round(oeeAtual * 1.2));
-    const valorTotal = dados.valor_total || Math.round(perdasTotais * 0.3 * 12 * 0.4);
+    const contratoFase1 = contratoFase1Res.rows[0];
+    const valorTotalProjeto = parseFloat(contratoFase1.valor_total_projeto);
+    const valorFase1 = parseFloat(contratoFase1.valor_fase1_diagnostico);
+    
+    // ========================================
+    // 3️⃣ CALCULAR VALORES DA FASE 2+3
+    // ========================================
+    const saldoFase2e3 = valorTotalProjeto - valorFase1;
+    
+    // Distribuição: 80% para Implementação, 20% para Acompanhamento
+    const valorImplementacao = Math.round(saldoFase2e3 * 0.8);
+    const valorAcompanhamentoTotal = Math.round(saldoFase2e3 * 0.2);
+    const MESES_ACOMPANHAMENTO = 6; // padrão
+    const valorAcompanhamentoMensal = Math.round(valorAcompanhamentoTotal / MESES_ACOMPANHAMENTO);
+    
+    // ========================================
+    // 4️⃣ PRAZOS E CONFIGURAÇÕES
+    // ========================================
     const prazoImplementacao = dados.prazo_implementacao_semanas || 6;
-    const prazoAcompanhamento = dados.prazo_acompanhamento_meses || 3;
     const dataAssinatura = dados.data_assinatura || new Date().toLocaleDateString('pt-BR');
-
+    
+    // ========================================
+    // 5️⃣ DADOS DO REPRESENTANTE E CONTATO
+    // ========================================
     const representante = {
       nome: dados.representante?.nome || "[NOME DO REPRESENTANTE]",
+      cargo: dados.representante?.cargo || "[CARGO]",
       nacionalidade: dados.representante?.nacionalidade || "[NACIONALIDADE]",
       estado_civil: dados.representante?.estado_civil || "[ESTADO CIVIL]",
       profissao: dados.representante?.profissao || "[PROFISSÃO]",
@@ -6313,6 +6306,65 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
       }).format(valor);
     };
 
+    // ========================================
+    // 6️⃣ FUNÇÃO PARA GERAR CLÁUSULA DE PAGAMENTO DINÂMICA
+    // ========================================
+    function gerarClausulaPagamentoFase2e3(valorTotal, forma_pagamento, valor_entrada, num_parcelas, valor_parcela, motivo_negociacao) {
+      let textoNegociacao = '';
+      let textoPagamento = '';
+
+      if (motivo_negociacao) {
+        textoNegociacao = `5.1.1. Motivo da negociação: ${motivo_negociacao}.\n`;
+      }
+
+      // À vista
+      if (forma_pagamento === 'a_vista') {
+        textoPagamento = `
+5.2. O pagamento será efetuado em parcela única, conforme abaixo:
+   a) 100% (cem por cento) na data de assinatura deste contrato: ${formatarMoeda(valorTotal)}.
+`;
+      }
+      // 50/50
+      else if (forma_pagamento === 'cinquenta_cinquenta') {
+        const valorEntrada = valorTotal * 0.5;
+        const valorFinal = valorTotal * 0.5;
+        
+        textoPagamento = `
+5.2. O pagamento será efetuado da seguinte forma:
+   a) 50% (cinquenta por cento) na data de assinatura deste contrato: ${formatarMoeda(valorEntrada)};
+   b) 50% (cinquenta por cento) na data de entrega e aceitação da Fase 2 (Implementação): ${formatarMoeda(valorFinal)}.
+
+5.2.1. A segunda parcela deverá ser paga em até 5 (cinco) dias úteis após a conclusão da Fase 2.
+`;
+      }
+      // Parcelado
+      else if (forma_pagamento === 'parcelado') {
+        const entrada = valor_entrada || (valorTotal * 0.5);
+        const parcelas = num_parcelas || 6;
+        const valorParcelaCalculado = valor_parcela || Math.ceil((valorTotal - entrada) / parcelas / 100) * 100;
+        
+        textoPagamento = `
+5.2. O pagamento será efetuado da seguinte forma:
+   a) Entrada de ${formatarMoeda(entrada)} (${Math.round((entrada/valorTotal)*100)}% do valor total) na data de assinatura deste contrato;
+   b) Saldo de ${formatarMoeda(valorTotal - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+
+5.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
+5.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+`;
+      }
+      // Fallback
+      else {
+        textoPagamento = `
+5.2. O pagamento será efetuado em parcela única de ${formatarMoeda(valorTotal)} na data de assinatura deste contrato.
+`;
+      }
+
+      return textoNegociacao + textoPagamento;
+    }
+
+    // ========================================
+    // 7️⃣ TEMPLATE DO CONTRATO
+    // ========================================
     const contrato = `
 CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE CONSULTORIA - FASE 2 (IMPLEMENTAÇÃO) E FASE 3 (ACOMPANHAMENTO)
 
@@ -6323,9 +6375,7 @@ CONTRATADA: NEXUS ENGENHARIA APLICADA, pessoa jurídica de direito privado, insc
 As partes, acima identificadas, têm entre si justo e contratado o seguinte:
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 1 – OBJETO
--------------------------------------------------------------------------------
 
 1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, compreendendo as Fases 2 e 3, com base nos resultados da Fase 1 (Diagnóstico) previamente concluída.
 
@@ -6343,7 +6393,7 @@ CLÁUSULA 1 – OBJETO
 
    f) 5S: Implementação da metodologia nos postos de trabalho prioritários.
 
-1.3. FASE 3 – ACOMPANHAMENTO (${prazoAcompanhamento} meses)
+1.3. FASE 3 – ACOMPANHAMENTO (${MESES_ACOMPANHAMENTO} meses)
 
    a) Monitoramento Semanal: Acompanhamento dos indicadores (OEE, produtividade, qualidade) com análise de tendências;
 
@@ -6358,39 +6408,31 @@ CLÁUSULA 1 – OBJETO
    f) Plano de Sustentação: Metodologia para manutenção dos ganhos após o término do contrato.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 2 – RESULTADOS ESPERADOS
--------------------------------------------------------------------------------
 
 2.1. Com base no diagnóstico realizado na Fase 1, estimamos os seguintes resultados:
 
    OEE:
-   - Situação atual: ${oeeAtual.toFixed(1)}%
-   - Meta após implementação: ${metaOEE}%
-   - Ganho projetado: ${(metaOEE - oeeAtual).toFixed(1)}%
+   - Situação atual: A ser confirmado no diagnóstico
+   - Meta após implementação: Mínimo de 85%
+   - Ganho projetado: A ser quantificado no diagnóstico
 
    Setup (postos gargalo):
-   - Situação atual: ${setupMaior} minutos
-   - Meta após implementação: ${Math.round(setupMaior * 0.5)} minutos
+   - Situação atual: A ser confirmado no diagnóstico
+   - Meta após implementação: Redução mínima de 50%
    - Redução projetada: 50%
 
    Perdas Totais:
-   - Situação atual: R$ ${perdasTotais.toLocaleString('pt-BR')}/mês
-   - Meta após implementação: R$ ${(perdasTotais * 0.7).toLocaleString('pt-BR')}/mês
-   - Economia projetada: R$ ${(perdasTotais * 0.3).toLocaleString('pt-BR')}/mês
-
-   Indicadores Financeiros:
-   - ROI estimado: ${((perdasTotais * 0.3 * 12 / valorTotal) * 100).toFixed(0)}% ao ano
-   - Payback estimado: ${(valorTotal / (perdasTotais * 0.3)).toFixed(1)} meses
+   - Situação atual: A ser confirmado no diagnóstico
+   - Meta após implementação: Redução de 30%
+   - Economia projetada: A ser quantificada no diagnóstico
 
 2.2. Os resultados acima são estimativas baseadas no diagnóstico e nas melhores práticas do setor. Os resultados finais serão medidos e documentados ao longo da execução.
 
 2.3. A CONTRATADA não garante percentuais específicos de melhoria, comprometendo-se a empregar as melhores técnicas e esforços para atingir os objetivos.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 3 – OBRIGAÇÕES DA CONTRATADA
--------------------------------------------------------------------------------
 
 3.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis, observando os padrões éticos e técnicos da profissão.
 
@@ -6413,9 +6455,14 @@ CLÁUSULA 3 – OBRIGAÇÕES DA CONTRATADA
    d) Fatores externos não previstos.
 
 
--------------------------------------------------------------------------------
+CLÁUSULA 3-A – AUTORIDADE TÉCNICA DA CONTRATADA
+
+3-A.1. A CONTRATANTE reconhece que a CONTRATADA atua como especialista técnico independente, sendo responsável apenas pela análise, diagnóstico e recomendação técnica, cabendo exclusivamente à CONTRATANTE a decisão exclusiva e de sua inteira responsabilidade sobre a implementação ou não das ações sugeridas.
+
+3-A.2. A CONTRATADA não se responsabiliza por decisões tomadas pela CONTRATANTE com base no diagnóstico, bem como pelos resultados ou consequências decorrentes da não implementação total ou parcial das recomendações apresentadas.
+
+
 CLÁUSULA 4 – OBRIGAÇÕES DA CONTRATANTE
--------------------------------------------------------------------------------
 
 4.1. Fornecer acesso irrestrito às áreas produtivas, instalações, equipamentos e informações necessárias à execução dos serviços, durante o horário de trabalho normal da CONTRATANTE ou conforme acordado entre as partes.
 
@@ -6434,50 +6481,57 @@ CLÁUSULA 4 – OBRIGAÇÕES DA CONTRATANTE
 4.8. A CONTRATANTE declara estar ciente de que os resultados da implementação dependem diretamente da qualidade e veracidade das informações fornecidas, assumindo integral responsabilidade por eventuais imprecisões ou omissões.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 5 – VALOR E CONDIÇÕES DE PAGAMENTO
--------------------------------------------------------------------------------
 
-5.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorTotal)} (${valorTotal.toLocaleString('pt-BR')} reais).
+5.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(saldoFase2e3)} (${saldoFase2e3.toLocaleString('pt-BR')} reais), assim discriminados:
 
-5.2. O pagamento será efetuado da seguinte forma:
-   - 40% na assinatura do contrato: ${formatarMoeda(valorTotal * 0.4)}
-   - 40% na entrega da Fase 2 (Implementação): ${formatarMoeda(valorTotal * 0.4)}
-   - 20% na conclusão da Fase 3 (Acompanhamento): ${formatarMoeda(valorTotal * 0.2)}
+   a) Implementação (Fase 2): ${formatarMoeda(valorImplementacao)} (${Math.round((valorImplementacao/saldoFase2e3)*100)}% do valor total)
+   b) Acompanhamento (Fase 3): ${formatarMoeda(valorAcompanhamentoTotal)} (${Math.round((valorAcompanhamentoTotal/saldoFase2e3)*100)}% do valor total)
+      └─ ${MESES_ACOMPANHAMENTO} (seis) meses × ${formatarMoeda(valorAcompanhamentoMensal)}/mês
 
-5.3. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
+${gerarClausulaPagamentoFase2e3(
+  saldoFase2e3,
+  dados.forma_pagamento || 'cinquenta_cinquenta',
+  dados.valor_entrada,
+  dados.num_parcelas,
+  dados.valor_parcela,
+  dados.motivo_negociacao
+)}
+
+5.3. Os valores mensais referentes à Fase 3 (Acompanhamento) estão incluídos nas parcelas e serão discriminados mensalmente na fatura/cobrança.
+
+5.4. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
    Banco: [BANCO]
    Agência: [AGÊNCIA]
    Conta: [CONTA]
    Titular: NEXUS ENGENHARIA APLICADA
-   CNPJ: [CNPJ DA NEXUS]
 
-5.4. O comprovante de pagamento deverá ser enviado à CONTRATADA por e-mail em até 24 (vinte e quatro) horas após a efetivação, sob pena de suspensão dos serviços até a regularização.
+5.5. O comprovante de pagamento deverá ser enviado à CONTRATADA por e-mail em até 24 (vinte e quatro) horas após a efetivação, sob pena de suspensão dos serviços até a regularização.
 
-5.5. O atraso no pagamento sujeitará a CONTRATANTE a:
-   a) Multa moratória de 2% (dois por cento) sobre o valor total da parcela em atraso;
+5.6. O atraso no pagamento sujeitará a CONTRATANTE a:
+   a) Multa moratória de 2% (dois por cento) sobre o valor da parcela em atraso;
    b) Juros de mora de 1% (um por cento) ao mês, calculados pro rata die;
    c) Correção monetária pelo índice IPCA (Índice de Preços ao Consumidor Amplo), ou outro índice oficial que venha a substituí-lo, contada da data do vencimento até a data do efetivo pagamento.
 
-5.6. Em caso de inadimplemento, a CONTRATADA poderá suspender imediatamente a execução dos serviços até a regularização do pagamento, sem prejuízo da cobrança dos encargos previstos.
+5.7. Em caso de inadimplemento, a CONTRATADA poderá suspender imediatamente a execução dos serviços até a regularização do pagamento, sem prejuízo da cobrança dos encargos previstos.
+
+5.8. A ausência de pagamento na data acordada implica no não início dos serviços, não sendo reservada agenda, cronograma ou equipe técnica pela CONTRATADA, ficando a CONTRATANTE sujeita à realocação da disponibilidade da CONTRATADA em sua agenda.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 6 – PRAZO E VIGÊNCIA
--------------------------------------------------------------------------------
 
-6.1. O presente contrato terá vigência de ${prazoImplementacao} semanas para a Fase 2, acrescidas de ${prazoAcompanhamento} meses para a Fase 3, contados da data de assinatura.
+6.1. O presente contrato terá vigência de ${prazoImplementacao} semanas para a Fase 2, acrescidas de ${MESES_ACOMPANHAMENTO} meses para a Fase 3, contados da data de assinatura, podendo ser automaticamente estendido até a conclusão integral dos serviços previstos neste contrato.
 
-6.2. O início dos serviços está condicionado ao pagamento da primeira parcela e à disponibilização das informações e acessos previstos na Cláusula 4.
+6.2. O início dos serviços está condicionado ao pagamento da parcela prevista na Cláusula 5.2 e à disponibilização das informações e acessos previstos na Cláusula 4.
 
-6.3. Os prazos poderão ser ajustados por acordo entre as partes, mediante aditivo contratual.
+6.3. Os prazos poderão ser ajustados por acordo entre as partes, mediante aditivo contratual. Após o término do prazo padrão de ${MESES_ACOMPANHAMENTO} meses, a Fase 3 poderá ser estendida por meio de aditivo contratual específico.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 7 – PROPRIEDADE INTELECTUAL
--------------------------------------------------------------------------------
 
-7.1. Toda a metodologia, know-how, softwares, sistemas (incluindo, mas não se limitando, à plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos, materiais de treinamento e quaisquer outros ativos intelectuais desenvolvidos ou utilizados pela CONTRATADA são de sua propriedade exclusiva.
+A execução dos serviços poderá envolver o uso da plataforma proprietária Hórus, desenvolvida pela CONTRATADA, a qual constitui diferencial competitivo e ativo estratégico exclusivo, sendo vedado qualquer tipo de acesso, reprodução ou tentativa de engenharia reversa.
+
+7.1. Toda a metodologia, know-how, softwares, sistemas (incluindo, mas não se limitando, à plataforma Hórus), técnicas, ferramentas, modelos, planilhas, procedimentos, materiais de treinamento e quaisquer outros ativos intelectuais desenvolvidos ou utilizados pela CONTRATADA na execução dos serviços são de sua propriedade exclusiva, constituindo segredo de negócio.
 
 7.2. A CONTRATANTE não adquire, por força deste contrato, qualquer direito de propriedade sobre a metodologia, softwares ou ferramentas da CONTRATADA, incluindo, expressamente, a plataforma Hórus.
 
@@ -6491,9 +6545,7 @@ CLÁUSULA 7 – PROPRIEDADE INTELECTUAL
 7.5. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 10 (dez) vezes o valor total deste contrato, sem prejuízo das perdas e danos e demais sanções cabíveis.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 8 – CONFIDENCIALIDADE
--------------------------------------------------------------------------------
 
 8.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais a que tiverem acesso em razão deste contrato, considerando-se como tais:
    a) Dados operacionais, financeiros, estratégicos, de produção, qualidade, manutenção, custos e quaisquer informações de negócio da CONTRATANTE;
@@ -6502,7 +6554,7 @@ CLÁUSULA 8 – CONFIDENCIALIDADE
 
 8.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término deste contrato.
 
-8.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa de R$ 50.000,00 (cinquenta mil reais) por evento de violação, sem prejuízo das perdas e danos e demais sanções cabíveis.
+8.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 3 (três) vezes o valor total deste contrato, sem prejuízo das perdas e danos e demais sanções cabíveis.
 
 8.4. Não se considera violação da confidencialidade a divulgação de informações:
    a) Exigidas por determinação judicial ou legal;
@@ -6510,16 +6562,14 @@ CLÁUSULA 8 – CONFIDENCIALIDADE
    c) Autorizadas previamente por escrito pela parte titular.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 9 – RESCISÃO
--------------------------------------------------------------------------------
 
 9.1. O presente contrato poderá ser rescindido por qualquer das partes, mediante notificação por escrito, nas seguintes hipóteses:
    a) Descumprimento de qualquer cláusula contratual, não sanado no prazo de 15 (quinze) dias úteis após o recebimento da notificação;
    b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias, sem justa causa;
    c) Por caso fortuito ou força maior que impeça a execução do objeto, assim reconhecido judicialmente.
 
-9.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 5.1.
+9.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 5.1. Caso a rescisão ocorra após o início dos serviços, serão devidos os valores proporcionais às atividades já executadas, não sendo cabível reembolso integral dos valores pagos.
 
 9.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá à CONTRATANTE os valores já pagos, atualizados monetariamente, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato.
 
@@ -6528,20 +6578,16 @@ CLÁUSULA 9 – RESCISÃO
 9.5. A rescisão não exonera as partes das obrigações de confidencialidade previstas na Cláusula 8 e das penalidades eventualmente já incorridas.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 10 – PENALIDADES
--------------------------------------------------------------------------------
 
 10.1. Pelo descumprimento de qualquer obrigação contratual não especificamente penalizada em outras cláusulas, será aplicada multa de 10% (dez por cento) sobre o valor total do contrato, sem prejuízo da obrigação principal.
 
 10.2. As multas previstas neste contrato são independentes e acumuláveis, podendo ser exigidas cumulativamente quando configuradas as respectivas hipóteses.
 
-10.3. A mora de qualquer das partes no cumprimento de suas obrigações sujeitará o infrator à incidência dos encargos previstos na Cláusula 5.5.
+10.3. A mora de qualquer das partes no cumprimento de suas obrigações sujeitará o infrator à incidência dos encargos previstos na Cláusula 5.6.
 
 
--------------------------------------------------------------------------------
 CLÁUSULA 11 – DISPOSIÇÕES GERAIS
--------------------------------------------------------------------------------
 
 11.1. Este contrato é celebrado em caráter intuitu personae em relação à CONTRATADA, não podendo a CONTRATANTE ceder ou transferir seus direitos e obrigações sem prévia e expressa anuência por escrito da CONTRATADA.
 
@@ -6556,53 +6602,63 @@ CLÁUSULA 11 – DISPOSIÇÕES GERAIS
 11.5. Os títulos das cláusulas são meramente descritivos e não vinculam a interpretação do contrato.
 
 
--------------------------------------------------------------------------------
-CLÁUSULA 12 – FORO
--------------------------------------------------------------------------------
+CLÁUSULA 12 – LIMITAÇÃO DE RESPONSABILIDADE
 
-12.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
+12.1. A responsabilidade total da CONTRATADA, independentemente da natureza da reclamação ou da teoria jurídica aplicável, fica limitada ao valor total pago pela CONTRATANTE nos últimos 12 (doze) meses, nunca excedendo o valor total deste contrato.
+
+12.2. Em nenhuma hipótese a CONTRATADA será responsável por danos indiretos, lucros cessantes, perda de faturamento, perda de clientes, perda de oportunidades de negócio, danos à imagem ou reputação, ou qualquer outro dano consequencial.
 
 
--------------------------------------------------------------------------------
+CLÁUSULA 13 – FORO
+
+13.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
+
+
 ASSINATURAS
--------------------------------------------------------------------------------
 
 E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
 
 ${empresa.cidade || '[CIDADE]'}, ${dataAssinatura}.
 
+<div class="grid-assinaturas-print">
+  <div class="campo-assinatura">
+    <div class="linha-assinatura"></div>
+    <strong>CONTRATANTE</strong><br/>
+    ${empresa.nome}<br/>
+    ${representante.nome}<br/>
+    ${representante.cargo}
+  </div>
 
-CONTRATANTE
-${empresa.nome}
+  <div class="campo-assinatura">
+    <div class="linha-assinatura"></div>
+    <strong>CONTRATADA</strong><br/>
+    NEXUS ENGENHARIA APLICADA<br/>
+    [SEU NOME]<br/>
+    [SEU CARGO]
+  </div>
+</div>
 
-_________________________________
-Assinatura
+<div class="testemunhas-print" style="margin-top: 40px; page-break-inside: avoid;">
+  <p style="margin-bottom: 30px;"><strong>TESTEMUNHAS:</strong></p>
+  
+  <div style="display: flex; gap: 60px;">
+    <div style="flex: 1;">
+      <div style="border-top: 1px solid #000; margin-bottom: 8px; width: 100%;"></div>
+      <p style="margin: 0; font-size: 9pt; color: #444;">Assinatura da Testemunha 1</p>
+      <p style="margin: 10px 0 0 0; font-size: 10pt;">Nome: __________________________</p>
+      <p style="margin: 5px 0 0 0; font-size: 10pt;">RG: _____________________________</p>
+      <p style="margin: 5px 0 0 0; font-size: 10pt;">CPF: ____________________________</p>
+    </div>
 
-${representante.nome}
-[Cargo]
-
-
-CONTRATADA
-NEXUS ENGENHARIA APLICADA
-
-_________________________________
-Assinatura
-
-[SEU NOME]
-[Cargo]
-
-
-TESTEMUNHAS
-
-1. _________________________________
-   Nome: _______________________________
-   RG: _______________________________
-   CPF: _______________________________
-
-2. _________________________________
-   Nome: _______________________________
-   RG: _______________________________
-   CPF: _______________________________
+    <div style="flex: 1;">
+      <div style="border-top: 1px solid #000; margin-bottom: 8px; width: 100%;"></div>
+      <p style="margin: 0; font-size: 9pt; color: #444;">Assinatura da Testemunha 2</p>
+      <p style="margin: 10px 0 0 0; font-size: 10pt;">Nome: __________________________</p>
+      <p style="margin: 5px 0 0 0; font-size: 10pt;">RG: _____________________________</p>
+      <p style="margin: 5px 0 0 0; font-size: 10pt;">CPF: ____________________________</p>
+    </div>
+  </div>
+</div>
 `;
 
     res.status(200).json({
@@ -6610,12 +6666,11 @@ TESTEMUNHAS
       contrato: contrato,
       metadata: {
         empresa: empresa.nome,
-        valor_total: valorTotal,
-        oee_atual: oeeAtual.toFixed(1),
-        meta_oee: metaOEE,
-        perdas_totais: perdasTotais,
-        roi_estimado: ((perdasTotais * 0.3 * 12 / valorTotal) * 100).toFixed(0),
-        payback_estimado: (valorTotal / (perdasTotais * 0.3)).toFixed(1),
+        valor_total: saldoFase2e3,
+        valor_implementacao: valorImplementacao,
+        valor_acompanhamento_total: valorAcompanhamentoTotal,
+        valor_acompanhamento_mensal: valorAcompanhamentoMensal,
+        meses_acompanhamento: MESES_ACOMPANHAMENTO,
         data_geracao: new Date().toISOString()
       }
     });
