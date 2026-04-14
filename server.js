@@ -8855,7 +8855,7 @@ try {
   console.log("Erro ao buscar OEE médio:", err.message);
 }
 
-const oeeProjetado = Math.min(85, oeeMedioReal + 20);
+const oeeProjetado = Math.min(85, Math.round(oeeMedioReal + 20));
 
 // Calcular tempo estimado
 const tempoTotalSemanas = diagnosticos.reduce((acc, d) => acc + (d.esforco_semanas || 0), 0);
