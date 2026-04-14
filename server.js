@@ -8728,13 +8728,13 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
       const totalProducao = parseFloat(producaoRes.rows[0]?.total_producao) || 1;
       const refugoPercentual = (totalRefugo / totalProducao) * 100;
 
-      // Buscar OEE médio
-      const oeeRes = await pool.query(`
+      // Buscar OEE médio da linha
+      const oeeLinhaRes = await pool.query(`
         SELECT COALESCE(AVG(oee), 0) as oee_medio
         FROM producao_oee
         WHERE linha_id = $1
       `, [linha.id]);
-      const oeeMedio = parseFloat(oeeRes.rows[0]?.oee_medio) || 0;
+      const oeeMedio = parseFloat(oeeLinhaRes.rows[0]?.oee_medio) || 0;
 
       // Calcular desbalanceamento
       let desbalanceamentoPercentual = 0;
@@ -8839,28 +8839,28 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
     const mediaPrioridade = diagnosticos.filter(d => d.prioridade === 'media');
     const baixaPrioridade = diagnosticos.filter(d => d.prioridade === 'baixa');
 
-// 6. Calcular projeções
-const ganhoTotalMensal = diagnosticos.reduce((acc, d) => acc + (d.ganho_estimado || 0), 0);
+    // 6. Calcular ganho total mensal
+    const ganhoTotalMensal = diagnosticos.reduce((acc, d) => acc + (d.ganho_estimado || 0), 0);
 
-// Calcular OEE médio real (buscar do banco ou usar valor padrão)
-let oeeMedioReal = 0;
-try {
-  const oeeRes = await pool.query(`
-    SELECT COALESCE(AVG(oee), 0) as oee_medio
-    FROM producao_oee
-    WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
-  `, [empresaId]);
-  oeeMedioReal = parseFloat(oeeRes.rows[0]?.oee_medio) || 0;
-} catch (err) {
-  console.log("Erro ao buscar OEE médio:", err.message);
-}
+    // 7. Calcular OEE médio global da empresa (com ROUND)
+    let oeeMedioReal = 0;
+    try {
+      const oeeRes = await pool.query(`
+        SELECT ROUND(COALESCE(AVG(oee), 0), 1) as oee_medio
+        FROM producao_oee
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      `, [empresaId]);
+      oeeMedioReal = parseFloat(oeeRes.rows[0]?.oee_medio) || 0;
+    } catch (err) {
+      console.log("Erro ao buscar OEE médio:", err.message);
+    }
 
-const oeeProjetado = Math.min(85, Math.round(oeeMedioReal + 20));
+    // 8. Calcular projeções
+    const oeeProjetado = Math.min(85, Math.round(oeeMedioReal + 20));
+    const tempoTotalSemanas = diagnosticos.reduce((acc, d) => acc + (d.esforco_semanas || 0), 0);
+    const tempoMeses = Math.ceil(tempoTotalSemanas / 4);
 
-// Calcular tempo estimado
-const tempoTotalSemanas = diagnosticos.reduce((acc, d) => acc + (d.esforco_semanas || 0), 0);
-const tempoMeses = Math.ceil(tempoTotalSemanas / 4);
-
+    // 9. Retornar resultado
     res.json({
       sucesso: true,
       empresa: empresa.nome,
