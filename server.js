@@ -8786,6 +8786,17 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
         }
 
         if (aplicar && valorReal !== null) {
+          // Buscar plano de ação completo para esta regra
+          const planoAcaoRes = await pool.query(`
+            SELECT pa.ordem, f.nome as ferramenta, f.passo_a_passo, pa.descricao_extra, pa.tempo_semanas
+            FROM planos_acao pa
+            JOIN ferramentas_lean f ON f.id = pa.ferramenta_id
+            WHERE pa.regra_id = $1
+            ORDER BY pa.ordem ASC
+          `, [regra.id]);
+          
+          const planoAcao = planoAcaoRes.rows;
+          
           // Calcular ganho estimado
           let ganhoEstimado = 0;
           if (regra.indicador === 'tempo_setup_minutos') {
@@ -8799,6 +8810,9 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
           } else if (regra.indicador === 'oee_percentual') {
             ganhoEstimado = Math.round((85 - valorReal) / 100 * totalProducao * 50);
           }
+          
+          // Calcular esforço total (soma dos tempos do plano de ação)
+          const esforcoTotalSemanas = planoAcao.reduce((acc, p) => acc + (p.tempo_semanas || 1), 0);
 
           diagnosticos.push({
             linha_id: linha.id,
@@ -8807,10 +8821,15 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
             indicador: regra.indicador,
             valor_real: parseFloat(valorReal.toFixed(2)),
             valor_limite: regra.valor_limite,
-            ferramenta: regra.ferramenta_nome,
-            passo_a_passo: regra.passo_a_passo,
+            plano_acao: planoAcao.map(p => ({
+              ordem: p.ordem,
+              ferramenta: p.ferramenta,
+              passo_a_passo: p.passo_a_passo,
+              descricao_extra: p.descricao_extra,
+              tempo_semanas: p.tempo_semanas
+            })),
             ganho_estimado: ganhoEstimado,
-            esforco_semanas: regra.esforco_semanas,
+            esforco_semanas: esforcoTotalSemanas,
             prioridade: regra.prioridade
           });
 
@@ -8824,9 +8843,9 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
             linha.id,
             regra.descricao,
             `Valor atual de ${valorReal.toFixed(2)} ultrapassa o limite de ${regra.valor_limite}`,
-            [regra.ferramenta_nome],
+            planoAcao.map(p => p.ferramenta),
             ganhoEstimado,
-            regra.esforco_semanas,
+            esforcoTotalSemanas,
             regra.prioridade,
             req.usuario.id
           ]);
@@ -8875,9 +8894,36 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
         oee_atual: oeeMedioReal
       },
       diagnosticos: {
-        alta: altaPrioridade,
-        media: mediaPrioridade,
-        baixa: baixaPrioridade
+        alta: altaPrioridade.map(d => ({
+          linha_nome: d.linha_nome,
+          problema: d.problema,
+          valor_real: d.valor_real,
+          valor_limite: d.valor_limite,
+          plano_acao: d.plano_acao,
+          ganho_estimado: d.ganho_estimado,
+          esforco_semanas: d.esforco_semanas,
+          prioridade: d.prioridade
+        })),
+        media: mediaPrioridade.map(d => ({
+          linha_nome: d.linha_nome,
+          problema: d.problema,
+          valor_real: d.valor_real,
+          valor_limite: d.valor_limite,
+          plano_acao: d.plano_acao,
+          ganho_estimado: d.ganho_estimado,
+          esforco_semanas: d.esforco_semanas,
+          prioridade: d.prioridade
+        })),
+        baixa: baixaPrioridade.map(d => ({
+          linha_nome: d.linha_nome,
+          problema: d.problema,
+          valor_real: d.valor_real,
+          valor_limite: d.valor_limite,
+          plano_acao: d.plano_acao,
+          ganho_estimado: d.ganho_estimado,
+          esforco_semanas: d.esforco_semanas,
+          prioridade: d.prioridade
+        }))
       },
       projecoes: {
         novo_oee: `${oeeProjetado}%`,
