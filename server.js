@@ -8871,7 +8871,8 @@ const tempoMeses = Math.ceil(tempoTotalSemanas / 4);
         media_prioridade: mediaPrioridade.length,
         baixa_prioridade: baixaPrioridade.length,
         ganho_total_mensal: ganhoTotalMensal,
-        oee_projetado: oeeProjetado
+        oee_projetado: oeeProjetado,
+        oee_atual: oeeMedioReal
       },
       diagnosticos: {
         alta: altaPrioridade,
@@ -8881,7 +8882,8 @@ const tempoMeses = Math.ceil(tempoTotalSemanas / 4);
       projecoes: {
         novo_oee: `${oeeProjetado}%`,
         ganho_mensal: `R$ ${ganhoTotalMensal.toLocaleString('pt-BR')}`,
-        tempo_estimado: `${tempoMeses} meses`
+        tempo_estimado: `${tempoMeses} meses`,
+        ganho_oee: `${(oeeProjetado - oeeMedioReal).toFixed(1)} p.p.`
       }
     });
 
