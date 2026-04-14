@@ -8839,9 +8839,27 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
     const mediaPrioridade = diagnosticos.filter(d => d.prioridade === 'media');
     const baixaPrioridade = diagnosticos.filter(d => d.prioridade === 'baixa');
 
-    // 6. Calcular projeções
-    const ganhoTotalMensal = diagnosticos.reduce((acc, d) => acc + (d.ganho_estimado || 0), 0);
-    const oeeProjetado = Math.min(85, oeeMedio + 20);
+// 6. Calcular projeções
+const ganhoTotalMensal = diagnosticos.reduce((acc, d) => acc + (d.ganho_estimado || 0), 0);
+
+// Calcular OEE médio real (buscar do banco ou usar valor padrão)
+let oeeMedioReal = 0;
+try {
+  const oeeRes = await pool.query(`
+    SELECT COALESCE(AVG(oee), 0) as oee_medio
+    FROM producao_oee
+    WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+  `, [empresaId]);
+  oeeMedioReal = parseFloat(oeeRes.rows[0]?.oee_medio) || 0;
+} catch (err) {
+  console.log("Erro ao buscar OEE médio:", err.message);
+}
+
+const oeeProjetado = Math.min(85, oeeMedioReal + 20);
+
+// Calcular tempo estimado
+const tempoTotalSemanas = diagnosticos.reduce((acc, d) => acc + (d.esforco_semanas || 0), 0);
+const tempoMeses = Math.ceil(tempoTotalSemanas / 4);
 
     res.json({
       sucesso: true,
@@ -8863,7 +8881,7 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
       projecoes: {
         novo_oee: `${oeeProjetado}%`,
         ganho_mensal: `R$ ${ganhoTotalMensal.toLocaleString('pt-BR')}`,
-        tempo_estimado: `${Math.ceil(diagnosticos.reduce((acc, d) => acc + (d.esforco_semanas || 0), 0) / 4)} meses`
+        tempo_estimado: `${tempoMeses} meses`
       }
     });
 
