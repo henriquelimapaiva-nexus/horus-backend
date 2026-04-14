@@ -8916,6 +8916,236 @@ app.get("/api/evolution/compare/:empresaId", autenticarToken, async (req, res) =
 });
 
 // ========================================
+// 🤖 IA DE SUGESTÕES DE MELHORIA - MOTOR DE INFERÊNCIA
+// ========================================
+
+/**
+ * ROTA: ANALISAR EMPRESA E GERAR SUGESTÕES
+ * Busca dados reais, aplica regras e retorna recomendações detalhadas
+ */
+app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+  const { linha_id } = req.query;
+
+  try {
+    // 1. Buscar dados da empresa
+    const empresaRes = await pool.query(
+      "SELECT id, nome FROM empresas WHERE id = $1",
+      [empresaId]
+    );
+    if (empresaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Empresa não encontrada" });
+    }
+    const empresa = empresaRes.rows[0];
+
+    // 2. Buscar linhas da empresa (ou filtrar por linha específica)
+    let linhasQuery = "SELECT * FROM linhas_producao WHERE empresa_id = $1";
+    const params = [empresaId];
+    if (linha_id) {
+      linhasQuery += " AND id = $2";
+      params.push(linha_id);
+    }
+    const linhasRes = await pool.query(linhasQuery, params);
+    const linhas = linhasRes.rows;
+
+    if (linhas.length === 0) {
+      return res.status(404).json({ 
+        erro: "Nenhuma linha de produção encontrada para esta empresa" 
+      });
+    }
+
+    // 3. Buscar todas as regras de análise
+    const regrasRes = await pool.query(`
+      SELECT r.*, f.nome as ferramenta_nome, f.passo_a_passo, f.ganho_estimado_percentual, f.esforco_semanas
+      FROM regras_analise r
+      JOIN ferramentas_lean f ON f.id = r.ferramenta_id
+      ORDER BY 
+        CASE r.prioridade WHEN 'alta' THEN 1 WHEN 'media' THEN 2 WHEN 'baixa' THEN 3 END
+    `);
+    const regras = regrasRes.rows;
+
+    // 4. Processar cada linha
+    const diagnosticos = [];
+
+    for (const linha of linhas) {
+      // Buscar postos da linha
+      const postosRes = await pool.query(
+        "SELECT * FROM posto_trabalho WHERE linha_id = $1",
+        [linha.id]
+      );
+      const postos = postosRes.rows;
+
+      // Buscar perdas da linha
+      const perdasRes = await pool.query(`
+        SELECT 
+          COALESCE(SUM(pl.microparadas_minutos), 0) as total_microparadas,
+          COALESCE(SUM(pl.refugo_pecas), 0) as total_refugo
+        FROM perdas_linha pl
+        JOIN linha_produto lp ON lp.id = pl.linha_produto_id
+        WHERE lp.linha_id = $1
+      `, [linha.id]);
+
+      // Buscar produção para calcular percentual de refugo
+      const producaoRes = await pool.query(`
+        SELECT COALESCE(SUM(pecas_produzidas), 0) as total_producao
+        FROM producao_oee
+        WHERE linha_id = $1
+      `, [linha.id]);
+
+      const totalMicroparadas = parseFloat(perdasRes.rows[0]?.total_microparadas) || 0;
+      const totalRefugo = parseFloat(perdasRes.rows[0]?.total_refugo) || 0;
+      const totalProducao = parseFloat(producaoRes.rows[0]?.total_producao) || 1;
+      const refugoPercentual = (totalRefugo / totalProducao) * 100;
+
+      // Buscar OEE médio
+      const oeeRes = await pool.query(`
+        SELECT COALESCE(AVG(oee), 0) as oee_medio
+        FROM producao_oee
+        WHERE linha_id = $1
+      `, [linha.id]);
+      const oeeMedio = parseFloat(oeeRes.rows[0]?.oee_medio) || 0;
+
+      // Calcular desbalanceamento
+      let desbalanceamentoPercentual = 0;
+      if (postos.length > 0) {
+        const temposCiclo = postos.map(p => parseFloat(p.tempo_ciclo_segundos) || 0);
+        const mediaCiclo = temposCiclo.reduce((a, b) => a + b, 0) / temposCiclo.length;
+        const maxCiclo = Math.max(...temposCiclo);
+        if (mediaCiclo > 0) {
+          desbalanceamentoPercentual = ((maxCiclo - mediaCiclo) / mediaCiclo) * 100;
+        }
+      }
+
+      // Setup máximo
+      const setupMaximo = Math.max(...postos.map(p => parseFloat(p.tempo_setup_minutos) || 0));
+
+      // Aplicar regras
+      for (const regra of regras) {
+        let valorReal = null;
+        let aplicar = false;
+
+        switch (regra.indicador) {
+          case 'tempo_setup_minutos':
+            valorReal = setupMaximo;
+            if (regra.operador === '>') aplicar = valorReal > regra.valor_limite;
+            else if (regra.operador === '>=') aplicar = valorReal >= regra.valor_limite;
+            break;
+          case 'refugo_percentual':
+            valorReal = refugoPercentual;
+            if (regra.operador === '>') aplicar = valorReal > regra.valor_limite;
+            else if (regra.operador === 'between') aplicar = valorReal >= regra.valor_limite && valorReal <= regra.valor_limite_max;
+            break;
+          case 'microparadas_minutos':
+            valorReal = totalMicroparadas;
+            if (regra.operador === '>') aplicar = valorReal > regra.valor_limite;
+            break;
+          case 'oee_percentual':
+            valorReal = oeeMedio;
+            if (regra.operador === '<') aplicar = valorReal < regra.valor_limite;
+            break;
+          case 'desbalanceamento_percentual':
+            valorReal = desbalanceamentoPercentual;
+            if (regra.operador === '>') aplicar = valorReal > regra.valor_limite;
+            break;
+          case 'gargalo_existe':
+            const gargalo = postos.find(p => parseFloat(p.tempo_ciclo_segundos) === Math.max(...postos.map(p2 => parseFloat(p2.tempo_ciclo_segundos) || 0)));
+            valorReal = gargalo ? 1 : 0;
+            if (regra.operador === '=') aplicar = valorReal === regra.valor_limite;
+            break;
+        }
+
+        if (aplicar && valorReal !== null) {
+          // Calcular ganho estimado
+          let ganhoEstimado = 0;
+          if (regra.indicador === 'tempo_setup_minutos') {
+            const minutosEconomizados = (valorReal - 15) * 22; // 22 dias/mês
+            ganhoEstimado = Math.round(minutosEconomizados * 2); // R$ 2/min estimado
+          } else if (regra.indicador === 'refugo_percentual') {
+            const reducaoEstimada = (valorReal - 2) / 100 * totalProducao * 50; // R$ 50/peça
+            ganhoEstimado = Math.round(reducaoEstimada);
+          } else if (regra.indicador === 'microparadas_minutos') {
+            ganhoEstimado = Math.round((valorReal - 50) * 2); // R$ 2/min
+          } else if (regra.indicador === 'oee_percentual') {
+            ganhoEstimado = Math.round((85 - valorReal) / 100 * totalProducao * 50);
+          }
+
+          diagnosticos.push({
+            linha_id: linha.id,
+            linha_nome: linha.nome,
+            problema: regra.descricao,
+            indicador: regra.indicador,
+            valor_real: parseFloat(valorReal.toFixed(2)),
+            valor_limite: regra.valor_limite,
+            ferramenta: regra.ferramenta_nome,
+            passo_a_passo: regra.passo_a_passo,
+            ganho_estimado: ganhoEstimado,
+            esforco_semanas: regra.esforco_semanas,
+            prioridade: regra.prioridade
+          });
+
+          // Salvar na tabela diagnosticos_ia
+          await pool.query(`
+            INSERT INTO diagnosticos_ia 
+            (empresa_id, linha_id, problema_identificado, causa_provavel, ferramentas_sugeridas, ganho_estimado_mensal, esforco_semanas, prioridade, created_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `, [
+            empresaId,
+            linha.id,
+            regra.descricao,
+            `Valor atual de ${valorReal.toFixed(2)} ultrapassa o limite de ${regra.valor_limite}`,
+            [regra.ferramenta_nome],
+            ganhoEstimado,
+            regra.esforco_semanas,
+            regra.prioridade,
+            req.usuario.id
+          ]);
+        }
+      }
+    }
+
+    // 5. Agrupar diagnósticos por prioridade
+    const altaPrioridade = diagnosticos.filter(d => d.prioridade === 'alta');
+    const mediaPrioridade = diagnosticos.filter(d => d.prioridade === 'media');
+    const baixaPrioridade = diagnosticos.filter(d => d.prioridade === 'baixa');
+
+    // 6. Calcular projeções
+    const ganhoTotalMensal = diagnosticos.reduce((acc, d) => acc + (d.ganho_estimado || 0), 0);
+    const oeeProjetado = Math.min(85, oeeMedio + 20);
+
+    res.json({
+      sucesso: true,
+      empresa: empresa.nome,
+      data_analise: new Date().toLocaleDateString('pt-BR'),
+      resumo: {
+        total_diagnosticos: diagnosticos.length,
+        alta_prioridade: altaPrioridade.length,
+        media_prioridade: mediaPrioridade.length,
+        baixa_prioridade: baixaPrioridade.length,
+        ganho_total_mensal: ganhoTotalMensal,
+        oee_projetado: oeeProjetado
+      },
+      diagnosticos: {
+        alta: altaPrioridade,
+        media: mediaPrioridade,
+        baixa: baixaPrioridade
+      },
+      projecoes: {
+        novo_oee: `${oeeProjetado}%`,
+        ganho_mensal: `R$ ${ganhoTotalMensal.toLocaleString('pt-BR')}`,
+        tempo_estimado: `${Math.ceil(diagnosticos.reduce((acc, d) => acc + (d.esforco_semanas || 0), 0) / 4)} meses`
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na IA de Sugestões:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao gerar sugestões",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
