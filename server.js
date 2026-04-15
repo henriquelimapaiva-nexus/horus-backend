@@ -5640,10 +5640,10 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
       }
       // Condições Especiais (Negociação personalizada)
       else if (forma_pagamento === 'especial') {
-        const entrada = valor_entrada || (valorNegociado * 0.3);
-        const parcelas = num_parcelas || 6;
-        const valorParcelaCalculado = valor_parcela || ((valorNegociado - entrada) / parcelas);
-        const percentualEntrada = Math.round((entrada / valorNegociado) * 100);
+        const entrada = valor_entrada || 0;
+        const parcelas = num_parcelas || 0;
+        const valorParcelaCalculado = valor_parcela || (parcelas > 0 ? (valorNegociado - entrada) / parcelas : 0);
+        const percentualEntrada = entrada > 0 ? Math.round((entrada / valorNegociado) * 100) : 0;
         
         textoPagamento = `
 4.2. O pagamento será efetuado da seguinte forma (condições especiais negociadas):
@@ -6089,7 +6089,7 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
       else if (forma_pagamento === 'parcelado') {
         const entrada = valor_entrada || (valorTotal * 0.5);
         const parcelas = num_parcelas || 6;
-        const valorParcelaCalculado = valor_parcela || Math.ceil((valorTotal - entrada) / parcelas / 100) * 100;
+        const valorParcelaCalculado = valor_parcela || ((valorTotal - entrada) / parcelas);
         
         textoPagamento = `
 5.2. O pagamento será efetuado da seguinte forma:
@@ -6102,10 +6102,10 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
       }
       // Condições Especiais (Negociação personalizada)
       else if (forma_pagamento === 'especial') {
-        const entrada = valor_entrada || (valorTotal * 0.3);
-        const parcelas = num_parcelas || 6;
-        const valorParcelaCalculado = valor_parcela || ((valorTotal - entrada) / parcelas);
-        const percentualEntrada = Math.round((entrada / valorTotal) * 100);
+        const entrada = valor_entrada || 0;
+        const parcelas = num_parcelas || 0;
+        const valorParcelaCalculado = valor_parcela || (parcelas > 0 ? (valorTotal - entrada) / parcelas : 0);
+        const percentualEntrada = entrada > 0 ? Math.round((entrada / valorTotal) * 100) : 0;
         
         textoPagamento = `
 5.2. O pagamento será efetuado da seguinte forma (condições especiais negociadas):
@@ -6142,7 +6142,7 @@ As partes, acima identificadas, têm entre si justo e contratado o seguinte:
 
 CLÁUSULA 1 – OBJETO
 
-1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produção, compreendendo as Fases 2 e 3, com base nos resultados da Fase 1 (Diagnóstico) previamente concluída.
+1.1. O presente contrato tem por objeto a prestação de serviços de consultoria em engenharia de produzione, compreendendo as Fases 2 e 3, com base nos resultados da Fase 1 (Diagnóstico) previamente concluída.
 
 1.2. FASE 2 – IMPLEMENTAÇÃO (${prazoImplementacao} semanas)
 
