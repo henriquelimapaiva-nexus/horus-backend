@@ -5623,19 +5623,36 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
 4.2.1. A segunda parcela deverá ser paga em até 5 (cinco) dias úteis após a entrega e aceitação do relatório.
 `;
       }
-      // Parcelado
+      // Parcelado (50% entrada)
       else if (forma_pagamento === 'parcelado') {
         const entrada = valor_entrada || (valorNegociado * 0.5);
         const parcelas = num_parcelas || 3;
-        const valorParcela = valor_parcela || ((valorNegociado - entrada) / parcelas);
+        const valorParcelaCalculado = valor_parcela || ((valorNegociado - entrada) / parcelas);
         
         textoPagamento = `
 4.2. O pagamento será efetuado da seguinte forma:
    a) Entrada de ${formatarMoeda(entrada)} (${Math.round((entrada/valorNegociado)*100)}% do valor total) na data de assinatura deste contrato;
-   b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcela)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+   b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
 
 4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
 4.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+`;
+      }
+      // Condições Especiais (Negociação personalizada)
+      else if (forma_pagamento === 'especial') {
+        const entrada = valor_entrada || (valorNegociado * 0.3);
+        const parcelas = num_parcelas || 6;
+        const valorParcelaCalculado = valor_parcela || ((valorNegociado - entrada) / parcelas);
+        const percentualEntrada = Math.round((entrada / valorNegociado) * 100);
+        
+        textoPagamento = `
+4.2. O pagamento será efetuado da seguinte forma (condições especiais negociadas):
+   a) Entrada de ${formatarMoeda(entrada)} (${percentualEntrada}% do valor total) na data de assinatura deste contrato;
+   b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+
+4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
+4.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+4.2.3. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
 `;
       }
       // Fallback (caso forma_pagamento não seja reconhecida)
@@ -5879,8 +5896,6 @@ ANEXO I – ESCOPO DETALHADO DA FASE 1 (DIAGNÓSTICO)
 
 ASSINATURAS
 
-ASSINATURAS
-
 E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
 
 ${empresa.cidade || '[CIDADE]'}, ${dataAssinatura}.
@@ -6070,7 +6085,7 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
 5.2.1. A segunda parcela deverá ser paga em até 5 (cinco) dias úteis após a conclusão da Fase 2.
 `;
       }
-      // Parcelado
+      // Parcelado (50% entrada)
       else if (forma_pagamento === 'parcelado') {
         const entrada = valor_entrada || (valorTotal * 0.5);
         const parcelas = num_parcelas || 6;
@@ -6083,6 +6098,23 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
 
 5.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
 5.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+`;
+      }
+      // Condições Especiais (Negociação personalizada)
+      else if (forma_pagamento === 'especial') {
+        const entrada = valor_entrada || (valorTotal * 0.3);
+        const parcelas = num_parcelas || 6;
+        const valorParcelaCalculado = valor_parcela || ((valorTotal - entrada) / parcelas);
+        const percentualEntrada = Math.round((entrada / valorTotal) * 100);
+        
+        textoPagamento = `
+5.2. O pagamento será efetuado da seguinte forma (condições especiais negociadas):
+   a) Entrada de ${formatarMoeda(entrada)} (${percentualEntrada}% do valor total) na data de assinatura deste contrato;
+   b) Saldo de ${formatarMoeda(valorTotal - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+
+5.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
+5.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+5.2.3. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
 `;
       }
       // Fallback
