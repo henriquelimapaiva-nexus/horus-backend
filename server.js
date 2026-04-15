@@ -4050,8 +4050,12 @@ app.put("/api/companies/:id", autenticarToken, async (req, res) => {
         turnos = COALESCE($5, turnos),
         dias_produtivos_mes = COALESCE($6, dias_produtivos_mes),
         meta_mensal = COALESCE($7, meta_mensal),
+        status = COALESCE($8, status),
+        valor_contrato = COALESCE($9, valor_contrato),
+        data_inicio = COALESCE($10, data_inicio),
+        data_previsao_fim = COALESCE($11, data_previsao_fim),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $8
+      WHERE id = $12
       RETURNING *;
     `;
 
