@@ -5635,7 +5635,7 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
    b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
 
 4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
-4.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+4.2.2. O valor da parcela foi calculado conforme política comercial da CONTRATADA e as condições especiais negociadas entre as partes.
 `;
       }
       // Condições Especiais (Negociação personalizada)
@@ -5651,7 +5651,7 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
    b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
 
 4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
-4.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+4.2.2. O valor da parcela foi calculado conforme política comercial da CONTRATADA e as condições especiais negociadas entre as partes.
 4.2.3. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
 `;
       }
