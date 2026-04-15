@@ -606,20 +606,24 @@ app.put("/api/lines/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
   const { nome, produtos } = req.body;
   
-  // Aceita horas em qualquer formato
-  const horas = req.body.horas_disponiveis || req.body.horas_produtivas_dia || 16;
-  const horasNumericas = parseFloat(horas) || 16;
+// 🔥 CORREÇÃO: Só atualiza horas se o campo foi enviado
+  let horasNumericas = null;
+  if (req.body.horas_disponiveis !== undefined) {
+    horasNumericas = parseFloat(req.body.horas_disponiveis) || 16;
+  } else if (req.body.horas_produtivas_dia !== undefined) {
+    horasNumericas = parseFloat(req.body.horas_produtivas_dia) || 16;
+  }
   
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
     
-    // 1. Atualizar a linha (nome e horas)
+    // 1. Atualizar a linha (nome e horas - com COALESCE)
     const result = await client.query(
       `UPDATE linhas_producao 
        SET nome = COALESCE($1, nome), 
-           horas_disponiveis = $2
+           horas_disponiveis = COALESCE($2, horas_disponiveis)
        WHERE id = $3 RETURNING *`,
       [nome, horasNumericas, id]
     );
