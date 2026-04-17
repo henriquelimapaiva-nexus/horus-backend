@@ -4082,36 +4082,21 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
 
     const empresaNome = empresaCheck.rows[0].nome;
 
-    // 🔥 PEGAR TODOS OS IDs DE POSTOS E COLABORADORES DA EMPRESA
-    const postosIds = await client.query(`
-      SELECT id FROM posto_trabalho 
-      WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+    // 🔥 EXCLUIR TODAS AS MEDIÇÕES DE CICLO (de uma vez, sem if)
+    await client.query(`
+      DELETE FROM ciclo_medicao 
+      WHERE operador_id IN (SELECT id FROM colaborador WHERE empresa_id = $1)
     `, [id]);
 
-    const colaboradoresIds = await client.query(`
-      SELECT id FROM colaborador WHERE empresa_id = $1
+    await client.query(`
+      DELETE FROM ciclo_medicao 
+      WHERE posto_id IN (
+        SELECT id FROM posto_trabalho 
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      )
     `, [id]);
 
-    const postosIdList = postosIds.rows.map(row => row.id);
-    const colaboradoresIdList = colaboradoresIds.rows.map(row => row.id);
-
-    // 1. EXCLUIR TODAS AS MEDIÇÕES DE CICLO (pelo posto_id)
-    if (postosIdList.length > 0) {
-      await client.query(
-        `DELETE FROM ciclo_medicao WHERE posto_id = ANY($1::int[])`,
-        [postosIdList]
-      );
-    }
-
-    // 2. EXCLUIR TODAS AS MEDIÇÕES DE CICLO (pelo operador_id)
-    if (colaboradoresIdList.length > 0) {
-      await client.query(
-        `DELETE FROM ciclo_medicao WHERE operador_id = ANY($1::int[])`,
-        [colaboradoresIdList]
-      );
-    }
-
-    // 3. Remover perdas
+    // 🔥 EXCLUIR PERDAS
     await client.query(`
       DELETE FROM perdas_linha 
       WHERE linha_produto_id IN (
@@ -4120,54 +4105,60 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 4. Remover vínculos linha_produto
+    // 🔥 EXCLUIR VÍNCULOS LINHA_PRODUTO
     await client.query(`
       DELETE FROM linha_produto 
       WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
     `, [id]);
 
-    // 5. Remover alocações
-    if (postosIdList.length > 0) {
-      await client.query(
-        `DELETE FROM alocacao_colaborador WHERE posto_id = ANY($1::int[])`,
-        [postosIdList]
-      );
-    }
+    // 🔥 EXCLUIR ALOCAÇÕES
+    await client.query(`
+      DELETE FROM alocacao_colaborador 
+      WHERE posto_id IN (
+        SELECT id FROM posto_trabalho 
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      )
+    `, [id]);
 
-    // 6. Remover postos
-    if (postosIdList.length > 0) {
-      await client.query(
-        `DELETE FROM posto_trabalho WHERE id = ANY($1::int[])`,
-        [postosIdList]
-      );
-    }
+    // 🔥 EXCLUIR POSTOS
+    await client.query(`
+      DELETE FROM posto_trabalho 
+      WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+    `, [id]);
 
-    // 7. Remover colaboradores
-    if (colaboradoresIdList.length > 0) {
-      await client.query(
-        `DELETE FROM colaborador WHERE id = ANY($1::int[])`,
-        [colaboradoresIdList]
-      );
-    }
+    // 🔥 EXCLUIR COLABORADORES
+    await client.query(`
+      DELETE FROM colaborador WHERE empresa_id = $1
+    `, [id]);
 
-    // 8. Remover cargos
-    await client.query("DELETE FROM cargos WHERE empresa_id = $1", [id]);
+    // 🔥 EXCLUIR CARGOS
+    await client.query(`
+      DELETE FROM cargos WHERE empresa_id = $1
+    `, [id]);
 
-    // 9. Remover produtos
-    await client.query("DELETE FROM produtos WHERE empresa_id = $1", [id]);
+    // 🔥 EXCLUIR PRODUTOS
+    await client.query(`
+      DELETE FROM produtos WHERE empresa_id = $1
+    `, [id]);
 
-    // 10. Remover linhas
-    await client.query("DELETE FROM linhas_producao WHERE empresa_id = $1", [id]);
+    // 🔥 EXCLUIR LINHAS
+    await client.query(`
+      DELETE FROM linhas_producao WHERE empresa_id = $1
+    `, [id]);
 
-    // 11. Remover contratos
-    await client.query("DELETE FROM contratos_fase1 WHERE empresa_id = $1", [id]);
+    // 🔥 EXCLUIR CONTRATOS
+    await client.query(`
+      DELETE FROM contratos_fase1 WHERE empresa_id = $1
+    `, [id]);
 
-    // 12. Remover empresa
-    await client.query("DELETE FROM empresas WHERE id = $1", [id]);
+    // 🔥 EXCLUIR EMPRESA
+    await client.query(`
+      DELETE FROM empresas WHERE id = $1
+    `, [id]);
 
     await client.query('COMMIT');
 
-    console.log(`✅ Empresa "${empresaNome}" (ID: ${id}) removida com todos os vínculos.`);
+    console.log(`✅ Empresa "${empresaNome}" (ID: ${id}) removida com sucesso.`);
     
     res.status(200).json({ 
       mensagem: `Empresa "${empresaNome}" e todos os seus dados foram removidos com sucesso.` 
