@@ -4082,15 +4082,8 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
 
     const empresaNome = empresaCheck.rows[0].nome;
 
-    // 1. Remover medições de ciclo (ANTES de excluir colaboradores)
-    await client.query(`
-      DELETE FROM ciclo_medicao 
-      WHERE operador_id IN (
-        SELECT id FROM colaborador WHERE empresa_id = $1
-      )
-    `, [id]);
-
-    // 2. Remover medições de ciclo por posto (ANTES de excluir postos)
+    // 1. 🔥 PRIMEIRO: Remover TODAS as medições de ciclo da empresa
+    // (via posto_id E via operador_id)
     await client.query(`
       DELETE FROM ciclo_medicao 
       WHERE posto_id IN (
@@ -4099,7 +4092,14 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 3. Remover perdas
+    await client.query(`
+      DELETE FROM ciclo_medicao 
+      WHERE operador_id IN (
+        SELECT id FROM colaborador WHERE empresa_id = $1
+      )
+    `, [id]);
+
+    // 2. Remover perdas
     await client.query(`
       DELETE FROM perdas_linha 
       WHERE linha_produto_id IN (
@@ -4108,13 +4108,13 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 4. Remover vínculos linha_produto
+    // 3. Remover vínculos linha_produto
     await client.query(`
       DELETE FROM linha_produto 
       WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
     `, [id]);
 
-    // 5. Remover alocações (ANTES de excluir postos e colaboradores)
+    // 4. Remover alocações
     await client.query(`
       DELETE FROM alocacao_colaborador 
       WHERE posto_id IN (
@@ -4123,28 +4123,28 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 6. Remover postos
+    // 5. Remover postos
     await client.query(`
       DELETE FROM posto_trabalho 
       WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
     `, [id]);
 
-    // 7. Remover colaboradores (depois de remover medições e alocações)
+    // 6. Remover colaboradores
     await client.query("DELETE FROM colaborador WHERE empresa_id = $1", [id]);
 
-    // 8. Remover cargos
+    // 7. Remover cargos
     await client.query("DELETE FROM cargos WHERE empresa_id = $1", [id]);
 
-    // 9. Remover produtos
+    // 8. Remover produtos
     await client.query("DELETE FROM produtos WHERE empresa_id = $1", [id]);
 
-    // 10. Remover linhas
+    // 9. Remover linhas
     await client.query("DELETE FROM linhas_producao WHERE empresa_id = $1", [id]);
 
-    // 11. Remover contratos
+    // 10. Remover contratos
     await client.query("DELETE FROM contratos_fase1 WHERE empresa_id = $1", [id]);
 
-    // 12. Remover empresa
+    // 11. Remover empresa
     await client.query("DELETE FROM empresas WHERE id = $1", [id]);
 
     await client.query('COMMIT');
