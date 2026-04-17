@@ -224,102 +224,69 @@ function calcularParcelasDiagnostico(valorDiagnostico) {
 }
 
 // ========================================
-// 💰 FUNÇÃO: CALCULAR PREÇO DO PROJETO (HÍBRIDO)
+// 💰 FUNÇÃO: CALCULAR PREÇO DO PROJETO (NOVA LÓGICA - SEM FATURAMENTO)
 // ========================================
 function calcularPrecoProjeto(dados) {
   const { 
-    faturamento, 
-    linhas = 1, 
-    urgencia = 'normal', 
-    complexidade = 'media', 
-    acesso_dados = 'imediato', 
-    projeto_piloto = false 
+    linhas = 1,
+    postos = 0,
+    complexidade = 'media',
+    urgencia = 'normal',
+    projeto_piloto = false
   } = dados;
   
-  let precoBase = 0;
+  // Valores base
+  const VALOR_POR_LINHA = 50000;
+  const VALOR_POR_POSTO = 3000;
   
-  // ========================================
-  // PASSO 1: DEFINIR FAIXA BASE
-  // ========================================
-  if (faturamento <= 500000) {
-    // Micro empresa: 5% do faturamento, entre R$ 10k e R$ 25k
-    precoBase = faturamento * 0.05;
-    precoBase = Math.max(10000, Math.min(25000, precoBase));
-  } 
-  else if (faturamento <= 2000000) {
-    // Pequena empresa: 4% do faturamento, entre R$ 40k e R$ 65k
-    precoBase = faturamento * 0.04;
-    precoBase = Math.max(40000, Math.min(65000, precoBase));
-  }
-  else if (faturamento <= 10000000) {
-    // Média empresa: 3% do faturamento, entre R$ 100k e R$ 190k
-    precoBase = faturamento * 0.03;
-    precoBase = Math.max(100000, Math.min(190000, precoBase));
-  }
-  else {
-    // Grande empresa: 2.5% do faturamento, mínimo R$ 250k
-    precoBase = Math.max(250000, faturamento * 0.025);
-  }
+  // Multiplicadores ajustados (compensando remoção do "acesso a dados")
+  const MULTIPLICADORES = {
+    complexidade: { 
+      baixa: 1.0, 
+      media: 1.40, 
+      alta: 1.72, 
+      muito_alta: 1.93 
+    },
+    urgencia: { 
+      normal: 1.0, 
+      alta: 1.24, 
+      muito_alta: 1.34 
+    }
+  };
   
-  // ========================================
-  // PASSO 2: APLICAR MULTIPLICADORES
-  // ========================================
-  if (urgencia === 'alta') precoBase *= 1.10;
-  if (complexidade === 'alta') precoBase *= 1.15;
-  if (acesso_dados === 'restrito') precoBase *= 1.10;
+  // 1. Cálculo base
+  let precoBase = (linhas * VALOR_POR_LINHA) + (postos * VALOR_POR_POSTO);
+  
+  // 2. Aplicar multiplicadores
+  precoBase *= MULTIPLICADORES.complexidade[complexidade];
+  precoBase *= MULTIPLICADORES.urgencia[urgencia];
+  
+  // 3. Desconto para projeto piloto
   if (projeto_piloto) precoBase *= 0.85;
   
-  // ========================================
-  // PASSO 3: LINHAS EXTRAS (acima de 2)
-  // ========================================
-  if (linhas > 2) {
-    precoBase += (linhas - 2) * 5000;
-  }
+  // 4. Arredondar para milhar
+  const precoFinal = Math.round(precoBase / 1000) * 1000;
   
-  // ========================================
-  // PASSO 4: ARREDONDAR PARA MILHAR
-  // ========================================
-  precoBase = Math.round(precoBase / 1000) * 1000;
-  
-  // ========================================
-  // PASSO 5: DISTRIBUIÇÃO HÍBRIDA
-  // ========================================
-  const acompanhamentoMinimo = CONFIG_SALARIO.getAcompanhamentoMinimo();
-  let acompanhamentoMensal = acompanhamentoMinimo;
-  
-  // 🔥 CORREÇÃO: Acompanhamento proporcional ao tamanho do projeto
-  if (precoBase >= 250000) {
-    // Projetos muito grandes (> R$ 250k)
-    const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
-    acompanhamentoMensal = Math.max(20000, acompanhamentoProporcional);
-  } 
-  else if (precoBase >= 100000) {
-    // Projetos grandes (R$ 100k - R$ 250k)
-    const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
-    acompanhamentoMensal = Math.max(8000, acompanhamentoProporcional);
-  }
-  else if (precoBase >= 40000) {
-    // Projetos médios (R$ 40k - R$ 100k)
-    const acompanhamentoProporcional = Math.round(precoBase * 0.15 / 12 / 100) * 100;
-    acompanhamentoMensal = Math.max(4900, acompanhamentoProporcional);
-  }
-  // Projetos pequenos (< R$ 40k) mantém o mínimo de R$ 4.900
+  // 5. Distribuição entre fases
+  const diagnostico = Math.max(5000, Math.round(precoFinal * 0.25 / 1000) * 1000);
+  const implementacao = Math.round(precoFinal * 0.50 / 1000) * 1000;
+  const acompanhamentoTotal = Math.round(precoFinal * 0.25 / 1000) * 1000;
+  const acompanhamentoMensal = Math.round(acompanhamentoTotal / 3 / 100) * 100;
   
   return {
-    total: precoBase,
-    diagnostico: Math.max(5000, Math.round(precoBase * 0.25 / 1000) * 1000),
-    implementacao: Math.round(precoBase * 0.60 / 1000) * 1000,
+    total: precoFinal,
+    diagnostico: diagnostico,
+    implementacao: implementacao,
+    acompanhamento_total: acompanhamentoTotal,
     acompanhamento_mensal: acompanhamentoMensal,
     participacao_percentual: 20,
     detalhamento: {
-      faixa: faturamento <= 500000 ? 'Micro' : faturamento <= 2000000 ? 'Pequena' : faturamento <= 10000000 ? 'Média' : 'Grande',
-      percentual_aplicado: faturamento <= 500000 ? '5%' : faturamento <= 2000000 ? '4%' : faturamento <= 10000000 ? '3%' : '2.5%',
+      valor_por_linha: VALOR_POR_LINHA,
+      valor_por_posto: VALOR_POR_POSTO,
       multiplicadores_aplicados: {
-        urgencia: urgencia === 'alta' ? '+10%' : '0%',
-        complexidade: complexidade === 'alta' ? '+15%' : '0%',
-        acesso_dados: acesso_dados === 'restrito' ? '+10%' : '0%',
-        projeto_piloto: projeto_piloto ? '-15%' : '0%',
-        linhas_extras: linhas > 2 ? `+R$ ${(linhas - 2) * 5000}` : '0'
+        complexidade: complexidade + ' (×' + MULTIPLICADORES.complexidade[complexidade] + ')',
+        urgencia: urgencia + ' (×' + MULTIPLICADORES.urgencia[urgencia] + ')',
+        projeto_piloto: projeto_piloto ? '-15%' : '0%'
       }
     }
   };
@@ -4767,34 +4734,40 @@ ROI anual: ${dados.roi?.roiAnual || '286'}%
  * - tem_viagem: boolean
  */
 // ========================================
-// 🤖 IA DE PRECIFICAÇÃO - VERSÃO HÍBRIDA
+// 🤖 IA DE PRECIFICAÇÃO - VERSÃO ATUALIZADA (SEM FATURAMENTO)
 // ========================================
 app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
   try {
     const dados = req.body;
     
     // ========================================
-    // VALIDAÇÃO DOS DADOS DE ENTRADA
+    // VALIDAÇÃO DOS DADOS DE ENTRADA (SEM FATURAMENTO)
     // ========================================
-    if (!dados.setor || !dados.faturamento_anual || dados.faturamento_anual <= 0) {
+    if (!dados.setor) {
       return res.status(400).json({ 
-        erro: "Setor e faturamento anual são obrigatórios para precificação." 
+        erro: "Setor é obrigatório para precificação." 
       });
     }
     
-    // Converter faturamento para número
-    const faturamento = parseFloat(dados.faturamento_anual);
+    // Validar número de linhas
     const numeroLinhas = parseInt(dados.numero_linhas) || 1;
+    if (numeroLinhas < 1) {
+      return res.status(400).json({ 
+        erro: "Número de linhas deve ser pelo menos 1." 
+      });
+    }
+    
+    // Validar número de postos (opcional, pode ser 0)
+    const numeroPostos = parseInt(dados.numero_postos) || 0;
     
     // ========================================
-    // CALCULAR PREÇO COM NOVA FÓRMULA HÍBRIDA
+    // CALCULAR PREÇO COM NOVA FÓRMULA (SEM FATURAMENTO)
     // ========================================
     const precos = calcularPrecoProjeto({
-      faturamento: faturamento,
       linhas: numeroLinhas,
-      urgencia: dados.urgencia || 'normal',
+      postos: numeroPostos,
       complexidade: dados.complexidade || 'media',
-      acesso_dados: dados.acesso_dados || 'imediato',
+      urgencia: dados.urgencia || 'normal',
       projeto_piloto: dados.projeto_piloto || false
     });
     
@@ -4808,7 +4781,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
     // ========================================
     res.status(200).json({
       status: "sucesso",
-      versao: "hibrida",
+      versao: "3.0 - sem faturamento",
       empresa: dados.empresa_nome || "Cliente",
       setor: dados.setor,
       data_calculo: new Date().toISOString(),
@@ -4817,6 +4790,7 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
         total_projeto: precos.total,
         diagnostico: precos.diagnostico,
         implementacao: precos.implementacao,
+        acompanhamento_total: precos.acompanhamento_total,
         acompanhamento_mensal: precos.acompanhamento_mensal,
         participacao_percentual: precos.participacao_percentual
       },
@@ -4833,6 +4807,8 @@ app.post("/api/ia/precificar", autenticarToken, async (req, res) => {
       detalhamento: precos.detalhamento,
       
       configuracao: {
+        valor_por_linha: 50000,
+        valor_por_posto: 3000,
         salario_minimo_atual: CONFIG_SALARIO.getSalarioMinimo(),
         acompanhamento_minimo_mensal: CONFIG_SALARIO.getAcompanhamentoMinimo()
       }
@@ -5588,7 +5564,7 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
     };
 
     // ========================================
-    // FUNÇÃO PARA GERAR CLÁUSULA DE PAGAMENTO DINÂMICA
+    // FUNÇÃO PARA GERAR CLÁUSULA DE PAGAMENTO DINÂMICA (ATUALIZADA)
     // ========================================
     function gerarClausulaPagamento(valorNegociado, forma_pagamento, valor_entrada, num_parcelas, valor_parcela, motivo_negociacao, desconto, motivo_desconto, valor_base_negociacao) {
       let textoNegociacao = '';
@@ -5618,20 +5594,20 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
 4.2.1. O pagamento à vista confere à CONTRATANTE o desconto já aplicado sobre o valor total, conforme condições comerciais acordadas entre as partes.
 `;
       }
-      // 50/50
+      // 50/50 para Diagnóstico
       else if (forma_pagamento === 'cinquenta_cinquenta') {
         const valorEntrada = valorNegociado * 0.5;
         const valorFinal = valorNegociado * 0.5;
         
         textoPagamento = `
-4.2. O pagamento será efetuado da seguinte forma:
+4.2. O pagamento da Fase 1 (Diagnóstico) será efetuado da seguinte forma:
    a) 50% (cinquenta por cento) na data de assinatura deste contrato: ${formatarMoeda(valorEntrada)};
    b) 50% (cinquenta por cento) na data de entrega e aceitação do relatório de diagnóstico: ${formatarMoeda(valorFinal)}.
 
 4.2.1. A segunda parcela deverá ser paga em até 5 (cinco) dias úteis após a entrega e aceitação do relatório.
 `;
       }
-      // Parcelado (50% entrada)
+      // Parcelado com entrada de 50%
       else if (forma_pagamento === 'parcelado') {
         const entrada = valor_entrada || (valorNegociado * 0.5);
         const parcelas = num_parcelas || 3;
@@ -5643,11 +5619,10 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
    b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
 
 4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
-4.2.2. O valor da parcela foi calculado conforme política comercial da CONTRATADA e as condições especiais negociadas entre as partes.
 `;
       }
       // Condições Especiais (Negociação personalizada)
-      else if (forma_pagamento === 'especial') {
+      else {
         const entrada = valor_entrada || 0;
         const parcelas = num_parcelas || 0;
         const valorParcelaCalculado = valor_parcela || (parcelas > 0 ? (valorNegociado - entrada) / parcelas : 0);
@@ -5659,14 +5634,7 @@ app.post("/api/ia/gerar-contrato-pre-diagnostico", autenticarToken, async (req, 
    b) Saldo de ${formatarMoeda(valorNegociado - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
 
 4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
-4.2.2. O valor da parcela foi calculado conforme política comercial da CONTRATADA e as condições especiais negociadas entre as partes.
-4.2.3. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
-`;
-      }
-      // Fallback (caso forma_pagamento não seja reconhecida)
-      else {
-        textoPagamento = `
-4.2. O pagamento será efetuado em parcela única de ${formatarMoeda(valorNegociado)} na data de assinatura deste contrato.
+4.2.2. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
 `;
       }
 
@@ -5743,19 +5711,27 @@ CLÁUSULA 3-A – AUTORIDADE TÉCNICA DA CONTRATADA
 
 CLÁUSULA 4 – VALOR E CONDIÇÕES DE PAGAMENTO
 
-4.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorNegociado)} (${valorNegociado.toLocaleString('pt-BR')} reais).
+4.1. O valor total dos serviços objeto deste contrato é de ${formatarMoeda(valorNegociado)} (${valorNegociado.toLocaleString('pt-BR')} reais), assim discriminado:
 
-${gerarClausulaPagamento(
-  valorNegociado,
-  dados.forma_pagamento || 'cinquenta_cinquenta',
-  dados.valor_entrada,
-  dados.num_parcelas,
-  dados.valor_parcela,
-  dados.motivo_negociacao,
-  dados.desconto,
-  dados.motivo_desconto,
-  dados.valor_base_negociacao || valorNegociado
-)}
+   a) Fase 1 (Diagnóstico): ${formatarMoeda(valorNegociado * 0.25)} (25% do valor total)
+   b) Fase 2 (Implementação): ${formatarMoeda(valorNegociado * 0.50)} (50% do valor total)
+   c) Fase 3 (Acompanhamento - 3 meses): ${formatarMoeda(valorNegociado * 0.25)} (25% do valor total)
+
+4.2. O pagamento será efetuado da seguinte forma:
+
+   **FASE 1 - DIAGNÓSTICO:**
+   a) 50% (cinquenta por cento) na data de assinatura deste contrato;
+   b) 50% (cinquenta por cento) na data de entrega e aceitação do relatório de diagnóstico.
+
+   **FASE 2 - IMPLEMENTAÇÃO:**
+   a) 40% (quarenta por cento) na data de início da implementação;
+   b) 30% (trinta por cento) 30 (trinta) dias após o início;
+   c) 30% (trinta por cento) na data de conclusão e aceitação da implementação.
+
+   **FASE 3 - ACOMPANHAMENTO (3 meses):**
+   a) Parcela mensal de ${formatarMoeda((valorNegociado * 0.25) / 3)} durante 3 (três) meses consecutivos, vencendo a primeira 30 (trinta) dias após a conclusão da implementação.
+
+4.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
 
 4.3. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
    Banco: [BANCO]
@@ -6063,9 +6039,9 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
     };
 
     // ========================================
-    // 6️⃣ FUNÇÃO PARA GERAR CLÁUSULA DE PAGAMENTO DINÂMICA
+    // 6️⃣ FUNÇÃO PARA GERAR CLÁUSULA DE PAGAMENTO DINÂMICA (ATUALIZADA)
     // ========================================
-    function gerarClausulaPagamentoFase2e3(valorTotal, forma_pagamento, valor_entrada, num_parcelas, valor_parcela, motivo_negociacao) {
+    function gerarClausulaPagamentoFase2e3(valorImplementacao, valorAcompanhamentoTotal, mesesAcompanhamento, valorAcompanhamentoMensal, forma_pagamento, valor_entrada, num_parcelas, valor_parcela, motivo_negociacao) {
       let textoNegociacao = '';
       let textoPagamento = '';
 
@@ -6075,58 +6051,75 @@ app.post("/api/ia/gerar-contrato-implementacao", autenticarToken, async (req, re
 
       // À vista
       if (forma_pagamento === 'a_vista') {
+        const valorTotal = valorImplementacao + valorAcompanhamentoTotal;
         textoPagamento = `
 5.2. O pagamento será efetuado em parcela única, conforme abaixo:
    a) 100% (cem por cento) na data de assinatura deste contrato: ${formatarMoeda(valorTotal)}.
 `;
       }
-      // 50/50
+      // 50/50 para Implementação
       else if (forma_pagamento === 'cinquenta_cinquenta') {
-        const valorEntrada = valorTotal * 0.5;
-        const valorFinal = valorTotal * 0.5;
+        const valorEntrada = valorImplementacao * 0.5;
+        const valorFinal = valorImplementacao * 0.5;
         
         textoPagamento = `
 5.2. O pagamento será efetuado da seguinte forma:
-   a) 50% (cinquenta por cento) na data de assinatura deste contrato: ${formatarMoeda(valorEntrada)};
-   b) 50% (cinquenta por cento) na data de entrega e aceitação da Fase 2 (Implementação): ${formatarMoeda(valorFinal)}.
 
-5.2.1. A segunda parcela deverá ser paga em até 5 (cinco) dias úteis após a conclusão da Fase 2.
+   **FASE 2 - IMPLEMENTAÇÃO:**
+   a) 50% (cinquenta por cento) na data de assinatura deste contrato: ${formatarMoeda(valorEntrada)};
+   b) 50% (cinquenta por cento) na data de conclusão e aceitação da implementação: ${formatarMoeda(valorFinal)}.
+
+   **FASE 3 - ACOMPANHAMENTO (${mesesAcompanhamento} meses):**
+   a) Parcela mensal de ${formatarMoeda(valorAcompanhamentoMensal)} durante ${mesesAcompanhamento} meses consecutivos, vencendo a primeira 30 (trinta) dias após a conclusão da implementação.
+
+5.2.1. A segunda parcela da implementação deverá ser paga em até 5 (cinco) dias úteis após a conclusão e aceitação.
 `;
       }
-      // Parcelado (50% entrada)
+      // Parcelado para Implementação (40/30/30)
       else if (forma_pagamento === 'parcelado') {
-        const entrada = valor_entrada || (valorTotal * 0.5);
-        const parcelas = num_parcelas || 6;
-        const valorParcelaCalculado = valor_parcela || ((valorTotal - entrada) / parcelas);
+        const entrada = valor_entrada || (valorImplementacao * 0.4);
+        const segundaParcela = valorImplementacao * 0.3;
+        const terceiraParcela = valorImplementacao * 0.3;
         
         textoPagamento = `
 5.2. O pagamento será efetuado da seguinte forma:
-   a) Entrada de ${formatarMoeda(entrada)} (${Math.round((entrada/valorTotal)*100)}% do valor total) na data de assinatura deste contrato;
-   b) Saldo de ${formatarMoeda(valorTotal - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
 
-5.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
-5.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
+   **FASE 2 - IMPLEMENTAÇÃO:**
+   a) 40% (quarenta por cento) na data de início da implementação: ${formatarMoeda(entrada)};
+   b) 30% (trinta por cento) 30 (trinta) dias após o início: ${formatarMoeda(segundaParcela)};
+   c) 30% (trinta por cento) na data de conclusão e aceitação da implementação: ${formatarMoeda(terceiraParcela)}.
+
+   **FASE 3 - ACOMPANHAMENTO (${mesesAcompanhamento} meses):**
+   a) Parcela mensal de ${formatarMoeda(valorAcompanhamentoMensal)} durante ${mesesAcompanhamento} meses consecutivos, vencendo a primeira 30 (trinta) dias após a conclusão da implementação.
+
+5.2.1. As parcelas da implementação serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
+5.2.2. O valor da parcela de acompanhamento é fixo durante o período contratado.
 `;
       }
       // Condições Especiais (Negociação personalizada)
       else if (forma_pagamento === 'especial') {
         const entrada = valor_entrada || 0;
         const parcelas = num_parcelas || 0;
-        const valorParcelaCalculado = valor_parcela || (parcelas > 0 ? (valorTotal - entrada) / parcelas : 0);
-        const percentualEntrada = entrada > 0 ? Math.round((entrada / valorTotal) * 100) : 0;
+        const valorParcelaCalculado = valor_parcela || (parcelas > 0 ? (valorImplementacao - entrada) / parcelas : 0);
+        const percentualEntrada = entrada > 0 ? Math.round((entrada / valorImplementacao) * 100) : 0;
         
         textoPagamento = `
 5.2. O pagamento será efetuado da seguinte forma (condições especiais negociadas):
-   a) Entrada de ${formatarMoeda(entrada)} (${percentualEntrada}% do valor total) na data de assinatura deste contrato;
-   b) Saldo de ${formatarMoeda(valorTotal - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+
+   **FASE 2 - IMPLEMENTAÇÃO:**
+   a) Entrada de ${formatarMoeda(entrada)} (${percentualEntrada}% do valor da implementação) na data de assinatura deste contrato;
+   b) Saldo de ${formatarMoeda(valorImplementacao - entrada)} em ${parcelas} parcelas mensais, consecutivas e sucessivas, no valor de ${formatarMoeda(valorParcelaCalculado)} cada uma, vencendo a primeira em 30 (trinta) dias após a assinatura.
+
+   **FASE 3 - ACOMPANHAMENTO (${mesesAcompanhamento} meses):**
+   a) Parcela mensal de ${formatarMoeda(valorAcompanhamentoMensal)} durante ${mesesAcompanhamento} meses consecutivos, vencendo a primeira 30 (trinta) dias após a conclusão da implementação.
 
 5.2.1. As parcelas serão corrigidas monetariamente pelo índice IPCA a partir da data de vencimento de cada uma.
-5.2.2. O valor da parcela foi calculado com base no limite máximo de R$ 5.000,00 por parcela, conforme política comercial da CONTRATADA.
-5.2.3. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
+5.2.2. Esta condição especial foi negociada conforme necessidade da CONTRATANTE e será detalhada no boleto/fatura.
 `;
       }
       // Fallback
       else {
+        const valorTotal = valorImplementacao + valorAcompanhamentoTotal;
         textoPagamento = `
 5.2. O pagamento será efetuado em parcela única de ${formatarMoeda(valorTotal)} na data de assinatura deste contrato.
 `;
@@ -6263,8 +6256,11 @@ CLÁUSULA 5 – VALOR E CONDIÇÕES DE PAGAMENTO
       └─ ${MESES_ACOMPANHAMENTO} (seis) meses × ${formatarMoeda(valorAcompanhamentoMensal)}/mês
 
 ${gerarClausulaPagamentoFase2e3(
-  saldoFase2e3,
-  dados.forma_pagamento || 'cinquenta_cinquenta',
+  valorImplementacao,
+  valorAcompanhamentoTotal,
+  MESES_ACOMPANHAMENTO,
+  valorAcompanhamentoMensal,
+  dados.forma_pagamento || 'parcelado',
   dados.valor_entrada,
   dados.num_parcelas,
   dados.valor_parcela,
