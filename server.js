@@ -265,13 +265,13 @@ function calcularPrecoProjeto(dados) {
   if (projeto_piloto) precoBase *= 0.85;
   
   // 4. Arredondar para milhar
-  const precoFinal = Math.round(precoBase / 1000) * 1000;
+  const precoFinal = precoBase;
   
   // 5. Distribuição entre fases
-  const diagnostico = Math.max(5000, Math.round(precoFinal * 0.25 / 1000) * 1000);
-  const implementacao = Math.round(precoFinal * 0.50 / 1000) * 1000;
-  const acompanhamentoTotal = Math.round(precoFinal * 0.25 / 1000) * 1000;
-  const acompanhamentoMensal = Math.round(acompanhamentoTotal / 3 / 100) * 100;
+  const diagnostico = Math.max(5000, precoFinal * 0.25);
+  const implementacao = precoFinal * 0.50;
+  const acompanhamentoTotal = precoFinal * 0.25;
+  const acompanhamentoMensal = acompanhamentoTotal / 3;
   
   return {
     total: precoFinal,
