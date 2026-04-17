@@ -9275,13 +9275,11 @@ CLÁUSULA 3 – VALOR E CONDIÇÕES DE PAGAMENTO
 
 3.2. O valor total da prorrogação é de **${formatarMoeda(valorTotal)}**, assim calculado:
 
-   | Item | Valor |
-   |------|-------|
-   | Valor mensal | ${formatarMoeda(valorMensal)} |
-   | Número de meses | ${meses} meses |
-   | Subtotal | ${formatarMoeda(valorTotalSemDesconto)} |
-   | Desconto (${descontoPercentual}%) | ${formatarMoeda(descontoValor)} |
-   | **Valor final** | **${formatarMoeda(valorTotal)}** |
+   - Valor mensal: ${formatarMoeda(valorMensal)}
+   - Número de meses: ${meses} meses
+   - Subtotal: ${formatarMoeda(valorTotalSemDesconto)}
+   - Desconto (${descontoPercentual}%): ${formatarMoeda(descontoValor)}
+   - **Valor final: ${formatarMoeda(valorTotal)}**
 
 3.3. O valor total inclui:
    - Acompanhamento mensal por ${meses} meses
