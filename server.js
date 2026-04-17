@@ -1341,27 +1341,58 @@ app.post("/api/employees", autenticarToken, async (req, res) => {
  */
 app.delete("/api/employees/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
 
   try {
-    const result = await pool.query("DELETE FROM colaborador WHERE id = $1 RETURNING *", [id]);
+    await client.query('BEGIN');
 
-    if (result.rowCount === 0) {
+    // Verificar se o colaborador existe
+    const colaboradorCheck = await client.query(
+      "SELECT nome FROM colaborador WHERE id = $1",
+      [id]
+    );
+    
+    if (colaboradorCheck.rowCount === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ erro: "Colaborador não encontrado." });
     }
 
-    res.status(200).json({ mensagem: "Colaborador removido do quadro." });
-  } catch (error) {
-    console.error("❌ Erro DELETE /employees:", error.message);
-    
-    // Se o colaborador estiver vinculado a registros históricos de produção (Cronoanálise), 
-    // o banco pode barrar a exclusão física dependendo da sua regra de negócio.
-    if (error.code === '23503') {
-      return res.status(400).json({ 
-        erro: "Não é possível excluir: este colaborador possui registros de atividades vinculados." 
-      });
-    }
+    const colaboradorNome = colaboradorCheck.rows[0].nome;
 
-    res.status(500).json({ erro: "Erro ao processar exclusão" });
+    // 🔥 PRIMEIRO: Remover medições de ciclo onde ele é operador
+    await client.query(
+      "DELETE FROM ciclo_medicao WHERE operador_id = $1",
+      [id]
+    );
+
+    // 🔥 SEGUNDO: Remover alocações do colaborador
+    await client.query(
+      "DELETE FROM alocacao_colaborador WHERE colaborador_id = $1",
+      [id]
+    );
+
+    // 🔥 TERCEIRO: Remover o colaborador
+    const result = await client.query(
+      "DELETE FROM colaborador WHERE id = $1 RETURNING nome",
+      [id]
+    );
+
+    await client.query('COMMIT');
+
+    console.log(`✅ Colaborador removido: ${colaboradorNome}`);
+    res.status(200).json({ 
+      mensagem: `Colaborador "${colaboradorNome}" removido com sucesso.` 
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Erro DELETE /employees:", error.message);
+    res.status(500).json({ 
+      erro: "Erro ao excluir colaborador. Verifique se há vínculos ativos.",
+      detalhe: error.message
+    });
+  } finally {
+    client.release();
   }
 });
 
