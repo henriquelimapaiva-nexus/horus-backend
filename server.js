@@ -4059,40 +4059,103 @@ app.put("/api/companies/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🗑️ MÓDULO: TERMINAÇÃO DE REGISTROS (SAFE DELETE)
+// 🗑️ MÓDULO: EXCLUIR EMPRESA COM TODOS OS VÍNCULOS
 // ========================================
 
 app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
 
   try {
-    // 1. Execução do Delete com Retorno de Identificação
-    const result = await pool.query(
-      "DELETE FROM empresas WHERE id = $1 RETURNING nome", 
+    await client.query('BEGIN');
+
+    // Verificar se a empresa existe
+    const empresaCheck = await client.query(
+      "SELECT nome FROM empresas WHERE id = $1",
       [id]
     );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ erro: "Registro não localizado para exclusão." });
+    
+    if (empresaCheck.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ erro: "Empresa não encontrada." });
     }
 
-    console.warn(`🚨 Empresa removida do ecossistema: ${result.rows[0].nome}`);
+    const empresaNome = empresaCheck.rows[0].nome;
+
+    // 1. Remover medições de ciclo
+    await client.query(`
+      DELETE FROM ciclo_medicao 
+      WHERE posto_id IN (
+        SELECT id FROM posto_trabalho 
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      )
+    `, [id]);
+
+    // 2. Remover perdas
+    await client.query(`
+      DELETE FROM perdas_linha 
+      WHERE linha_produto_id IN (
+        SELECT id FROM linha_produto 
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      )
+    `, [id]);
+
+    // 3. Remover vínculos linha_produto
+    await client.query(`
+      DELETE FROM linha_produto 
+      WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+    `, [id]);
+
+    // 4. Remover postos
+    await client.query(`
+      DELETE FROM posto_trabalho 
+      WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+    `, [id]);
+
+    // 5. Remover alocações
+    await client.query(`
+      DELETE FROM alocacao_colaborador 
+      WHERE posto_id IN (
+        SELECT id FROM posto_trabalho 
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      )
+    `, [id]);
+
+    // 6. Remover colaboradores
+    await client.query("DELETE FROM colaborador WHERE empresa_id = $1", [id]);
+
+    // 7. Remover cargos
+    await client.query("DELETE FROM cargos WHERE empresa_id = $1", [id]);
+
+    // 8. Remover produtos
+    await client.query("DELETE FROM produtos WHERE empresa_id = $1", [id]);
+
+    // 9. Remover linhas
+    await client.query("DELETE FROM linhas_producao WHERE empresa_id = $1", [id]);
+
+    // 10. Remover contratos
+    await client.query("DELETE FROM contratos_fase1 WHERE empresa_id = $1", [id]);
+
+    // 11. Remover empresa
+    await client.query("DELETE FROM empresas WHERE id = $1", [id]);
+
+    await client.query('COMMIT');
+
+    console.log(`✅ Empresa "${empresaNome}" (ID: ${id}) removida com todos os vínculos.`);
     
-    res.json({ 
-      mensagem: `A empresa ${result.rows[0].nome} e seus parâmetros foram removidos com sucesso.` 
+    res.status(200).json({ 
+      mensagem: `Empresa "${empresaNome}" e todos os seus dados foram removidos com sucesso.` 
     });
 
   } catch (error) {
-    // 2. Tratamento de Erro de Chave Estrangeira (O CORAÇÃO DO BLOCO 50)
-    if (error.code === '23503') {
-      return res.status(409).json({ 
-        erro: "Bloqueio de Integridade: Esta empresa possui linhas de produção, funcionários ou contratos ativos no Hórus.",
-        sugestao: "Remova os vínculos ou arquive a empresa em vez de excluí-la."
-      });
-    }
-
-    console.error("❌ Falha crítica na exclusão:", error.message);
-    res.status(500).json({ erro: "Erro sistêmico ao processar a exclusão." });
+    await client.query('ROLLBACK');
+    console.error("❌ Erro ao excluir empresa:", error.message);
+    res.status(500).json({ 
+      erro: "Erro ao excluir empresa. Verifique se há vínculos ativos.",
+      detalhe: error.message 
+    });
+  } finally {
+    client.release();
   }
 });
 
