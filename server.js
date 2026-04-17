@@ -9116,6 +9116,409 @@ app.get("/api/ia/sugestoes/:empresaId", autenticarToken, async (req, res) => {
 });
 
 // ========================================
+// 📄 CONTRATO DE RENOVAÇÃO DE ACOMPANHAMENTO (FASE 3 - EXTENSÃO) - VERSÃO FINAL
+// ========================================
+
+app.post("/api/ia/gerar-contrato-renovacao-acompanhamento", autenticarToken, async (req, res) => {
+  try {
+    const dados = req.body;
+
+    // Formatação robusta de data com timezone Brasil
+    const formatarData = (data) => {
+      return new Intl.DateTimeFormat('pt-BR', { 
+        timeZone: 'America/Sao_Paulo' 
+      }).format(data);
+    };
+
+    // Validações
+    if (!dados.empresa || !dados.empresa.nome) {
+      return res.status(400).json({ erro: "Dados da empresa são obrigatórios" });
+    }
+
+    if (!dados.meses || dados.meses < 1 || dados.meses > 12) {
+      return res.status(400).json({ erro: "Número de meses deve ser entre 1 e 12" });
+    }
+
+    if (!dados.valor_mensal || dados.valor_mensal <= 0) {
+      return res.status(400).json({ erro: "Valor mensal do acompanhamento é obrigatório" });
+    }
+
+    if (!dados.data_termino_contrato_original) {
+      return res.status(400).json({ erro: "Data de término do contrato original é obrigatória" });
+    }
+
+    // Calcular valores com desconto progressivo
+    const meses = parseInt(dados.meses);
+    const valorMensal = parseFloat(dados.valor_mensal);
+    
+    let descontoPercentual = 0;
+    if (meses >= 12) descontoPercentual = 15;
+    else if (meses >= 6) descontoPercentual = 10;
+    else if (meses >= 3) descontoPercentual = 5;
+    
+    const valorTotalSemDesconto = valorMensal * meses;
+    const descontoValor = valorTotalSemDesconto * (descontoPercentual / 100);
+    const valorTotal = valorTotalSemDesconto - descontoValor;
+    
+    // Calcular parcelas exatas (última parcela ajustada)
+    let numParcelas = Math.min(Math.ceil(valorTotal / 5000), meses);
+    if (numParcelas < 1) numParcelas = 1;
+    
+    const valorBaseParcela = valorTotal / numParcelas;
+    let parcelasArray = [];
+    for (let i = 0; i < numParcelas; i++) {
+      if (i === numParcelas - 1) {
+        parcelasArray.push(valorTotal - (valorBaseParcela * (numParcelas - 1)));
+      } else {
+        parcelasArray.push(valorBaseParcela);
+      }
+    }
+    
+    const valorParcela = Math.ceil(parcelasArray[0] * 100) / 100;
+    const ultimaParcela = Math.ceil(parcelasArray[parcelasArray.length - 1] * 100) / 100;
+    const temUltimaDiferente = Math.abs(valorParcela - ultimaParcela) > 0.01;
+    
+    // Calcular datas com fuso horário corrigido
+    const dataInicio = new Date(dados.data_termino_contrato_original);
+    dataInicio.setDate(dataInicio.getDate() + 1);
+    const dataInicioFormatada = formatarData(dataInicio);
+    
+    const dataFim = new Date(dataInicio);
+    dataFim.setMonth(dataFim.getMonth() + meses);
+    dataFim.setDate(dataFim.getDate() - 1);
+    const dataFimFormatada = formatarData(dataFim);
+    
+    const dataAssinaturaFormatada = formatarData(new Date());
+    
+    // Verificar se deve mostrar projeções (apenas se o cliente solicitou e forneceu os dados)
+    const mostrarProjecoes = dados.ganho_mensal_estimado && dados.ganho_mensal_estimado > 0;
+    let ganhoMensalEstimado = null;
+    let roiMensal = null;
+    let paybackMeses = null;
+    
+    if (mostrarProjecoes) {
+      ganhoMensalEstimado = parseFloat(dados.ganho_mensal_estimado);
+      roiMensal = (ganhoMensalEstimado / valorMensal) * 100;
+      paybackMeses = valorMensal > 0 ? (valorTotal / ganhoMensalEstimado) : 0;
+    }
+
+    const formatarMoeda = (valor) => {
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2
+      }).format(valor || 0);
+    };
+
+    // Mapeamento de porte
+    const getPorte = (valorMensal) => {
+      if (valorMensal <= 8500) return "Pequeno (1 linha)";
+      if (valorMensal <= 17000) return "Médio (2-3 linhas)";
+      if (valorMensal <= 25500) return "Grande (4-5 linhas)";
+      return "Premium (6+ linhas)";
+    };
+
+    function mesesPorExtenso(n) {
+      const extenso = ['um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove', 'dez', 'onze', 'doze'];
+      return extenso[n - 1] || n;
+    }
+
+    const contrato = `
+CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE CONSULTORIA - PRORROGAÇÃO DE ACOMPANHAMENTO (FASE 3)
+
+CONTRATANTE: ${dados.empresa.nome}, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº ${dados.empresa.cnpj || '[CNPJ]'}, com sede na ${dados.empresa.endereco || '[ENDEREÇO]'}, neste ato representada por ${dados.representante?.nome || '[NOME DO REPRESENTANTE]'}, ${dados.representante?.nacionalidade || '[NACIONALIDADE]'}, ${dados.representante?.estado_civil || '[ESTADO CIVIL]'}, ${dados.representante?.profissao || '[PROFISSÃO]'}, portador do RG nº ${dados.representante?.rg || '[RG]'} e CPF nº ${dados.representante?.cpf || '[CPF]'}, residente e domiciliado na ${dados.representante?.endereco || '[ENDEREÇO]'}.
+
+CONTRATADA: NEXUS ENGENHARIA APLICADA, pessoa jurídica de direito privado, inscrita no CNPJ sob o nº [CNPJ DA NEXUS], com sede na [ENDEREÇO DA NEXUS], neste ato representada por [SEU NOME], [NACIONALIDADE], [ESTADO CIVIL], [PROFISSÃO], portador do RG nº [RG] e CPF nº [CPF], residente e domiciliado na [ENDEREÇO].
+
+As partes, acima identificadas, têm entre si justo e contratado o seguinte:
+
+
+CLÁUSULA 1 – OBJETO
+
+1.1. O presente contrato tem por objeto a **prorrogação do serviço de acompanhamento pós-implantação** (Fase 3), previsto no contrato original de prestação de serviços de consultoria firmado entre as partes.
+
+1.2. O serviço de acompanhamento prorrogado compreende as seguintes atividades:
+
+   a) **Monitoramento Semanal:** Acompanhamento dos indicadores (OEE, produtividade, qualidade) com análise de tendências e envio de relatório semanal por e-mail;
+
+   b) **Reuniões de Acompanhamento:** 1 (uma) hora por semana, realizada de forma remota (videoconferência), com a liderança designada pela CONTRATANTE, **sendo que qualquer demanda adicional de horas ou reuniões deverá ser previamente acordada entre as partes por escrito**;
+
+   c) **Ajustes Finos:** Correções e otimizações nos processos implementados durante a Fase 2, mediante solicitação da CONTRATANTE com até 48 (quarenta e oito) horas de antecedência;
+
+   d) **Transferência de Conhecimento:** Capacitação complementar da equipe interna para sustentar os resultados;
+
+   e) **Relatórios Mensais:** Documentação detalhada da evolução dos indicadores e resultados alcançados, entregue até o 5º (quinto) dia útil do mês subsequente;
+
+   f) **Plano de Sustentação:** Revisão e atualização do plano de manutenção dos ganhos após o término do período contratado.
+
+1.3. **Não fazem parte do objeto deste contrato:**
+   a) Implementação de novas melhorias não previstas no diagnóstico original;
+   b) Substituição ou reparo de equipamentos;
+   c) Serviços de manutenção corretiva ou preditiva de máquinas;
+   d) Qualquer serviço ou atividade não expressamente previsto na Cláusula 1.2.
+
+
+CLÁUSULA 2 – PRAZO DE PRORROGAÇÃO
+
+2.1. O prazo de prorrogação do acompanhamento é de **${meses} (${mesesPorExtenso(meses)}) meses**, contados a partir do término do período de acompanhamento previsto no contrato original.
+
+2.2. O início do período de prorrogação será em **${dataInicioFormatada}** (dia seguinte ao término do contrato original) e o término em **${dataFimFormatada}**.
+
+2.3. As partes poderão, mediante aditivo contratual, prorrogar este contrato por períodos adicionais, respeitando as mesmas condições aqui estabelecidas, **podendo o valor do acompanhamento mensal ser reajustado com base no índice IPCA (Índice de Preços ao Consumidor Amplo) acumulado desde a data da última renovação, ou pela política comercial vigente da CONTRATADA à época da renovação, sendo este reajuste comunicado com pelo menos 30 (trinta) dias de antecedência.**
+
+2.4. A rescisão antecipada deste contrato seguirá integralmente as condições previstas na Cláusula 8 (Rescisão).
+
+
+CLÁUSULA 3 – VALOR E CONDIÇÕES DE PAGAMENTO
+
+3.1. O valor mensal do serviço de acompanhamento prorrogado é de **${formatarMoeda(valorMensal)}**.
+
+3.2. O valor total da prorrogação é de **${formatarMoeda(valorTotal)}**, assim calculado:
+
+   | Item | Valor |
+   |------|-------|
+   | Valor mensal | ${formatarMoeda(valorMensal)} |
+   | Número de meses | ${meses} meses |
+   | Subtotal | ${formatarMoeda(valorTotalSemDesconto)} |
+   | Desconto (${descontoPercentual}%) | ${formatarMoeda(descontoValor)} |
+   | **Valor final** | **${formatarMoeda(valorTotal)}** |
+
+3.3. O valor total inclui:
+   - Acompanhamento mensal por ${meses} meses
+   - Relatórios gerenciais
+   - Suporte e ajustes finos
+   - Transferência de conhecimento
+
+3.4. O pagamento será efetuado da seguinte forma:
+
+   ${dados.forma_pagamento === 'a_vista' ? `
+   **À vista:**
+   a) Pagamento único no valor de ${formatarMoeda(valorTotal)} na data de assinatura deste contrato, com desconto de ${descontoPercentual}% já aplicado.
+   ` : `
+   **Parcelado (${numParcelas}x):**
+   a) ${numParcelas} parcelas mensais, consecutivas e sucessivas;
+   b) ${temUltimaDiferente ? `${numParcelas - 1} primeiras parcelas de ${formatarMoeda(valorParcela)} e a última de ${formatarMoeda(ultimaParcela)}` : `${numParcelas} parcelas de ${formatarMoeda(valorParcela)}`}, **sendo que a última parcela poderá sofrer ajuste de centavos para equalização do valor total**;
+   c) Vencendo a primeira na data de assinatura deste contrato e as demais em igual dia dos meses subsequentes.
+   `}
+
+3.5. O pagamento deverá ser efetuado mediante depósito/transferência bancária para a conta:
+   Banco: [BANCO]
+   Agência: [AGÊNCIA]
+   Conta: [CONTA]
+   Titular: NEXUS ENGENHARIA APLICADA
+
+3.6. O atraso no pagamento sujeitará a CONTRATANTE a:
+   a) Multa moratória de 2% (dois por cento) sobre o valor da parcela em atraso;
+   b) Juros de mora de 1% (um por cento) ao mês, calculados pro rata die;
+   c) Correção monetária pelo índice IPCA.
+
+3.7. Em caso de inadimplemento, a CONTRATADA poderá suspender imediatamente a execução dos serviços até a regularização do pagamento. **A suspensão dos serviços por inadimplência exime a CONTRATADA de qualquer responsabilidade por impactos nos resultados, indicadores ou operações da CONTRATANTE durante o período de suspensão.**
+
+3.8. Os descontos progressivos previstos na Cláusula 3.2 são válidos somente para contratação realizada até **30 (trinta) dias após o término do contrato original**. Após este prazo, será aplicada a tabela de preços vigente à época.
+
+${mostrarProjecoes ? `
+CLÁUSULA 3-A – PROJEÇÕES MERAMENTE INDICATIVAS
+
+3-A.1. A pedido da CONTRATANTE, foram apresentadas projeções indicativas, as quais possuem caráter **meramente ilustrativo e indicativo**, sendo baseadas exclusivamente em premissas teóricas e em resultados históricos obtidos em outras empresas, que podem não se aplicar à realidade específica da CONTRATANTE.
+
+3-A.2. A CONTRATADA **não garante, não promete e não se responsabiliza** pela obtenção de qualquer resultado específico, seja ele de produtividade, eficiência, redução de custos, aumento de faturamento ou qualquer outro indicador.
+
+3-A.3. A CONTRATANTE reconhece que os resultados dependem exclusivamente de sua execução, engajamento, disciplina operacional, condições de mercado e fatores externos alheios ao controle da CONTRATADA.
+
+3-A.4. A CONTRATANTE declara que não celebrou este contrato com base em qualquer garantia de resultado, mas sim na confiança na metodologia e na capacidade técnica da CONTRATADA.
+
+3-A.5. A aceitação deste contrato implica concordância expressa de que nenhuma projeção verbal ou escrita constitui obrigação de resultado para a CONTRATADA.
+` : ''}
+
+CLÁUSULA 4 – OBRIGAÇÕES DA CONTRATADA
+
+4.1. Executar os serviços com diligência, empregando as melhores práticas e técnicas de engenharia disponíveis.
+
+4.2. Manter absoluto sigilo sobre todas as informações da CONTRATANTE a que tiver acesso.
+
+4.3. Entregar os relatórios mensais de acompanhamento até o 5º (quinto) dia útil do mês subsequente.
+
+4.4. Disponibilizar canal de comunicação para suporte durante o horário comercial (9h às 18h, dias úteis), com prazo de resposta de até 24 (vinte e quatro) horas.
+
+4.5. A responsabilidade da CONTRATADA é de **MEIO, não de resultado**, não respondendo por resultados específicos que dependam de fatores alheios ao seu controle.
+
+
+CLÁUSULA 5 – OBRIGAÇÕES DA CONTRATANTE
+
+5.1. Fornecer acesso às áreas produtivas, instalações, equipamentos e informações necessárias à execução dos serviços.
+
+5.2. Indicar, por escrito, um responsável técnico que atuará como contato oficial durante a vigência do contrato.
+
+5.3. Efetuar os pagamentos nas datas e condições estipuladas na Cláusula 3.
+
+5.4. Implementar as recomendações acordadas, sendo de sua inteira responsabilidade os resultados decorrentes da não implementação.
+
+
+CLÁUSULA 6 – PROPRIEDADE INTELECTUAL
+
+6.1. Toda a metodologia, know-how, softwares, sistemas (incluindo a plataforma Hórus), técnicas, ferramentas, modelos, procedimentos, materiais de treinamento, **incluindo, mas não se limitando a: algoritmos, lógica de cálculo, estrutura de dados, dashboards, fórmulas de precificação, critérios de análise e qualquer outro ativo intelectual** desenvolvido ou utilizado pela CONTRATADA são de sua propriedade exclusiva, constituindo segredo de negócio.
+
+6.2. A CONTRATANTE não adquire, por força deste contrato, qualquer direito de propriedade sobre a metodologia, softwares ou ferramentas da CONTRATADA.
+
+6.3. É expressamente proibido à CONTRATANTE copiar, reproduzir, modificar, descompilar ou realizar engenharia reversa da plataforma Hórus ou de qualquer ferramenta da CONTRATADA.
+
+6.4. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 10 (dez) vezes o valor total deste contrato.
+
+
+CLÁUSULA 7 – CONFIDENCIALIDADE
+
+7.1. As partes obrigam-se a manter absoluto sigilo sobre todas as informações confidenciais a que tiverem acesso em razão deste contrato.
+
+7.2. A obrigação de confidencialidade estende-se pelo prazo de 5 (cinco) anos após o término deste contrato.
+
+7.3. A violação desta cláusula sujeitará a parte infratora ao pagamento de multa equivalente a 3 (três) vezes o valor total deste contrato.
+
+
+CLÁUSULA 8 – RESCISÃO
+
+8.1. O presente contrato poderá ser rescindido por qualquer das partes, mediante notificação por escrito, nas seguintes hipóteses:
+   a) Descumprimento de qualquer cláusula contratual, não sanado no prazo de 15 (quinze) dias úteis após o recebimento da notificação;
+   b) Por interesse exclusivo de qualquer das partes, mediante aviso prévio de 30 (trinta) dias, sem justa causa;
+   c) Por caso fortuito ou força maior que impeça a execução do objeto, devidamente comprovado.
+
+8.2. Em caso de rescisão unilateral sem justa causa pela CONTRATANTE, será devida multa de 20% (vinte por cento) sobre o saldo remanescente do contrato, calculado com base no valor total previsto na Cláusula 3.2. Caso a rescisão ocorra após o início dos serviços, serão devidos os valores proporcionais às atividades já executadas, **considerando-se como executados todos os serviços disponibilizados pela CONTRATADA, independentemente de sua efetiva utilização pela CONTRATANTE**, não sendo cabível reembolso integral dos valores pagos.
+
+8.3. Em caso de rescisão por descumprimento da CONTRATADA, esta restituirá à CONTRATANTE os valores já pagos e não correspondentes a serviços já executados, atualizados monetariamente, e pagará multa de 20% (vinte por cento) sobre o valor total do contrato, limitada aos valores efetivamente pagos e não correspondentes a serviços já executados, **desde que comprovado descumprimento relevante que inviabilize a continuidade do contrato, não sendo suficiente para tanto descumprimentos meramente formais ou de pouca monta.**
+
+8.4. Em caso de rescisão por descumprimento da CONTRATANTE, esta pagará à CONTRATADA os serviços já prestados, atualizados monetariamente, e multa de 20% (vinte por cento) sobre o valor total do contrato.
+
+8.5. A rescisão não exonera as partes das obrigações de confidencialidade previstas na Cláusula 7 e das penalidades eventualmente já incorridas.
+
+
+CLÁUSULA 9 – PENALIDADES
+
+9.1. Pelo descumprimento de qualquer obrigação contratual não especificamente penalizada em outras cláusulas, será aplicada multa de 10% (dez por cento) sobre o valor total do contrato, sem prejuízo da obrigação principal.
+
+9.2. As multas previstas neste contrato poderão ser aplicadas de forma cumulativa, desde que não excedam, em conjunto, o valor total deste contrato, **e desde que sejam proporcionais ao prejuízo comprovadamente causado pela infração**, sob pena de redução equitativa pelo juízo.
+
+9.3. A mora de qualquer das partes no cumprimento de suas obrigações sujeitará o infrator à incidência dos encargos previstos na Cláusula 3.6.
+
+
+CLÁUSULA 10 – DISPOSIÇÕES GERAIS
+
+10.1. Este contrato é celebrado em caráter intuitu personae em relação à CONTRATADA, não podendo a CONTRATANTE ceder ou transferir seus direitos e obrigações sem prévia e expressa anuência por escrito da CONTRATADA.
+
+10.2. As comunicações entre as partes serão consideradas válidas quando enviadas por e-mail para os endereços abaixo:
+   CONTRATANTE: ${dados.contato?.email_contratante || '[E-MAIL DA CONTRATANTE]'}
+   CONTRATADA: ${dados.contato?.email_contratada || '[SEU E-MAIL]'}
+
+10.3. A tolerância quanto ao descumprimento de qualquer cláusula não constituirá novação, renúncia de direitos ou precedente, mantendo-se a exigibilidade das obrigações.
+
+10.4. Qualquer modificação ou aditivo a este contrato deverá ser formalizado por escrito, com anuência de ambas as partes.
+
+10.5. Os títulos das cláusulas são meramente descritivos e não vinculam a interpretação do contrato.
+
+
+CLÁUSULA 10-A – NÃO EXCLUSIVIDADE
+
+10-A.1. A CONTRATADA poderá prestar serviços de consultoria, treinamento, acompanhamento e quaisquer outros serviços correlatos a outras empresas, inclusive concorrentes da CONTRATANTE, desde que não haja violação das obrigações de confidencialidade previstas neste contrato.
+
+10-A.2. A CONTRATANTE reconhece e aceita que a metodologia Hórus é aplicável a diferentes setores e empresas, não havendo qualquer compromisso de exclusividade por parte da CONTRATADA.
+
+10-A.3. A presente cláusula prevalece sobre qualquer entendimento em contrário, não sendo devida qualquer compensação ou indenização à CONTRATANTE em razão da prestação de serviços a terceiros.
+
+
+CLÁUSULA 10-B – INDEPENDÊNCIA DAS PARTES
+
+10-B.1. As partes declaram que este contrato não estabelece qualquer vínculo societário, trabalhista, empregatício, de subordinação ou de parceria entre elas, sendo a CONTRATADA uma prestadora de serviços independente.
+
+10-B.2. A CONTRATADA exerce suas atividades com autonomia técnica, gerencial e operacional, utilizando seus próprios meios, métodos e ferramentas, não havendo qualquer relação de hierarquia ou subordinação com a CONTRATANTE.
+
+10-B.3. A CONTRATANTE não possui qualquer responsabilidade sobre obrigações trabalhistas, previdenciárias, fiscais ou sociais da CONTRATADA, que serão arcadas exclusivamente por esta.
+
+10-B.4. A presente cláusula prevalece sobre qualquer entendimento em contrário, não sendo devida qualquer indenização ou verba trabalhista em razão da execução deste contrato.
+
+
+CLÁUSULA 10-C – INTEGRAÇÃO DO CONTRATO
+
+10-C.1. Este contrato, juntamente com seus anexos, representa o acordo integral e exclusivo entre as partes, substituindo e extinguindo quaisquer entendimentos, negociações, ajustes, promessas, comunicações ou acordos anteriores, sejam eles verbais ou escritos, mantidos entre as partes em relação ao objeto deste contrato.
+
+10-C.2. Quaisquer declarações, promessas ou informações prestadas por representantes da CONTRATADA durante a fase de negociação que não estejam expressamente contempladas neste contrato não vinculam a CONTRATADA nem constituem obrigação contratual.
+
+10-C.3. A CONTRATANTE declara que não foi induzida a contratar com base em quaisquer promessas, garantias ou representações que não estejam expressamente descritas neste instrumento.
+
+10-C.4. Eventuais aditivos ou alterações a este contrato somente produzirão efeitos se formalizados por escrito e assinados por ambas as partes.
+
+
+CLÁUSULA 11 – LIMITAÇÃO DE RESPONSABILIDADE
+
+11.1. A responsabilidade total da CONTRATADA, independentemente da natureza da reclamação ou da teoria jurídica aplicável, fica limitada ao valor total pago pela CONTRATANTE nos últimos 12 (doze) meses, nunca excedendo o valor total deste contrato.
+
+11.2. Em nenhuma hipótese a CONTRATADA será responsável por danos indiretos, lucros cessantes, perda de faturamento, perda de clientes, perda de oportunidades de negócio, danos à imagem ou reputação, **incluindo, mas não se limitando a: perda de produção, parada de linha de produção, multas contratuais com terceiros, atrasos na entrega de produtos, perda de matéria-prima, ou qualquer outro dano consequencial**, mesmo que tenha sido avisada da possibilidade de tais danos.
+
+11.3. A CONTRATANTE declara ter ciência de que os resultados do acompanhamento dependem de múltiplos fatores, incluindo sua própria execução e engajamento, não podendo a CONTRATADA ser responsabilizada por resultados não alcançados.
+
+
+CLÁUSULA 12 – FORO
+
+12.1. Fica eleito o foro da Comarca de [SUA CIDADE/ESTADO] para dirimir quaisquer questões decorrentes deste contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.
+
+
+ASSINATURAS
+
+E, por estarem assim justas e contratadas, as partes assinam o presente instrumento em 2 (duas) vias de igual teor e forma.
+
+${dados.empresa.cidade || '[CIDADE]'}, ${dataAssinaturaFormatada}.
+
+<div style="display: flex; justify-content: space-between; gap: 40px; margin-top: 30px;">
+  <div style="flex: 1; text-align: center;">
+    <div style="border-top: 1px solid #000; margin: 15px 0 8px 0;"></div>
+    <strong>CONTRATANTE</strong><br/>
+    ${dados.empresa.nome}<br/>
+    ${dados.representante?.nome || '[REPRESENTANTE]'}<br/>
+    ${dados.representante?.cargo || '[CARGO]'}
+  </div>
+
+  <div style="flex: 1; text-align: center;">
+    <div style="border-top: 1px solid #000; margin: 15px 0 8px 0;"></div>
+    <strong>CONTRATADA</strong><br/>
+    NEXUS ENGENHARIA APLICADA<br/>
+    [SEU NOME]<br/>
+    [SEU CARGO]
+  </div>
+</div>
+`;
+
+    // Metadata sem projeções
+    const metadata = {
+      empresa: dados.empresa.nome,
+      porte: getPorte(valorMensal),
+      meses: meses,
+      valor_mensal: valorMensal,
+      valor_total: valorTotal,
+      desconto_percentual: descontoPercentual,
+      data_geracao: new Date().toISOString(),
+      tipo: "renovacao-acompanhamento"
+    };
+
+    // Só adiciona projeções se foram fornecidas
+    if (mostrarProjecoes) {
+      metadata.roi_estimado_mensal = `${roiMensal.toFixed(0)}%`;
+      metadata.payback_estimado_meses = paybackMeses.toFixed(1);
+      metadata.ganho_mensal_estimado = formatarMoeda(ganhoMensalEstimado);
+    }
+
+    res.status(200).json({
+      status: "sucesso",
+      contrato: contrato,
+      metadata: metadata
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao gerar contrato de renovação:", error.message);
+    res.status(500).json({ 
+      erro: "Falha ao gerar contrato de renovação",
+      detalhe: error.message 
+    });
+  }
+});
+
+// ========================================
 // 🏁 START ENGINE: NEXUS HÓRUS PLATFORM
 // ========================================
 
