@@ -4090,7 +4090,7 @@ app.put("/api/companies/:id", autenticarToken, async (req, res) => {
 });
 
 // ========================================
-// 🗑️ MÓDULO: EXCLUIR EMPRESA COM TODOS OS VÍNCULOS
+// 🗑️ MÓDULO: EXCLUIR EMPRESA COM TODOS OS VÍNCULOS (CASCATA COMPLETA)
 // ========================================
 
 app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
@@ -4113,12 +4113,13 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
 
     const empresaNome = empresaCheck.rows[0].nome;
 
-    // 🔥 EXCLUIR TODAS AS MEDIÇÕES DE CICLO (de uma vez, sem if)
+    // 1. Remover medições de ciclo (operador_id)
     await client.query(`
       DELETE FROM ciclo_medicao 
       WHERE operador_id IN (SELECT id FROM colaborador WHERE empresa_id = $1)
     `, [id]);
 
+    // 2. Remover medições de ciclo (posto_id)
     await client.query(`
       DELETE FROM ciclo_medicao 
       WHERE posto_id IN (
@@ -4127,7 +4128,7 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 🔥 EXCLUIR PERDAS
+    // 3. Remover perdas
     await client.query(`
       DELETE FROM perdas_linha 
       WHERE linha_produto_id IN (
@@ -4136,13 +4137,13 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 🔥 EXCLUIR VÍNCULOS LINHA_PRODUTO
+    // 4. Remover vínculos linha_produto
     await client.query(`
       DELETE FROM linha_produto 
       WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
     `, [id]);
 
-    // 🔥 EXCLUIR ALOCAÇÕES
+    // 5. Remover alocações
     await client.query(`
       DELETE FROM alocacao_colaborador 
       WHERE posto_id IN (
@@ -4151,45 +4152,70 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       )
     `, [id]);
 
-    // 🔥 EXCLUIR POSTOS
+    // 6. Remover postos
     await client.query(`
       DELETE FROM posto_trabalho 
       WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
     `, [id]);
 
-    // 🔥 EXCLUIR COLABORADORES
+    // 7. Remover colaboradores
     await client.query(`
       DELETE FROM colaborador WHERE empresa_id = $1
     `, [id]);
 
-    // 🔥 EXCLUIR CARGOS
+    // 8. Remover cargos
     await client.query(`
       DELETE FROM cargos WHERE empresa_id = $1
     `, [id]);
 
-    // 🔥 EXCLUIR PRODUTOS
+    // 9. Remover produtos
     await client.query(`
       DELETE FROM produtos WHERE empresa_id = $1
     `, [id]);
 
-    // 🔥 EXCLUIR LINHAS
+    // 10. Remover linhas
     await client.query(`
       DELETE FROM linhas_producao WHERE empresa_id = $1
     `, [id]);
 
-    // 🔥 EXCLUIR CONTRATOS
+    // 11. Remover contratos
     await client.query(`
       DELETE FROM contratos_fase1 WHERE empresa_id = $1
     `, [id]);
 
-    // 🔥 EXCLUIR EMPRESA
+    // 12. Remover análises de linha
+    await client.query(`
+      DELETE FROM analise_linha WHERE empresa_id = $1
+    `, [id]);
+
+    // 13. Remover elementos de trabalho
+    await client.query(`
+      DELETE FROM elementos_trabalho 
+      WHERE posto_id IN (
+        SELECT id FROM posto_trabalho 
+        WHERE linha_id IN (SELECT id FROM linhas_producao WHERE empresa_id = $1)
+      )
+    `, [id]);
+
+    // 14. 🔥 REMOVER LEADS VINCULADOS À EMPRESA (pelo nome)
+    await client.query(`
+      DELETE FROM leads WHERE nome = $1
+    `, [empresaNome]);
+
+    // 15. 🔥 REMOVER INTERAÇÕES DE LEADS ÓRFÃOS
+    await client.query(`
+      DELETE FROM interacoes_leads 
+      WHERE lead_id NOT IN (SELECT id FROM leads)
+    `);
+
+    // 16. Remover empresa
     await client.query(`
       DELETE FROM empresas WHERE id = $1
     `, [id]);
 
     await client.query('COMMIT');
 
-    console.log(`✅ Empresa "${empresaNome}" (ID: ${id}) removida com sucesso.`);
+    console.log(`✅ Empresa "${empresaNome}" (ID: ${id}) removida com TODOS os vínculos.`);
     
     res.status(200).json({ 
       mensagem: `Empresa "${empresaNome}" e todos os seus dados foram removidos com sucesso.` 
@@ -4197,7 +4223,7 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("❌ Erro ao excluir empresa:", error.message);
+    console.error("❌ Erro DELETE /companies:", error.message);
     res.status(500).json({ 
       erro: "Erro ao excluir empresa.",
       detalhe: error.message 
