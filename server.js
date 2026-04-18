@@ -429,27 +429,6 @@ app.post("/api/companies", autenticarToken, async (req, res) => {
   }
 });
 
-/**
- * 3️⃣ EXCLUIR EMPRESA
- * Protegida por Token e com verificação de existência.
- */
-app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const result = await pool.query("DELETE FROM empresas WHERE id = $1 RETURNING *", [id]);
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ erro: "Empresa não encontrada para exclusão." });
-    }
-
-    res.status(200).json({ mensagem: "Empresa e seus vínculos removidos com sucesso." });
-  } catch (error) {
-    console.error("❌ Erro DELETE /companies:", error.message);
-    res.status(500).json({ erro: "Erro ao excluir empresa. Verifique se há vínculos ativos." });
-  }
-});
-
 // ========================================
 // 🏭 MÓDULO: LINHAS DE PRODUÇÃO
 // ========================================
