@@ -9143,6 +9143,24 @@ app.post("/api/ia/gerar-contrato-renovacao-acompanhamento", autenticarToken, asy
       return res.status(400).json({ erro: "Valor mensal do acompanhamento é obrigatório" });
     }
 
+    // 🔥 AJUSTE DO VALOR DA RENOVAÇÃO (baseado no porte)
+const valorOriginal = parseFloat(dados.valor_mensal);
+let valorMensalRenovacao;
+
+if (valorOriginal <= 8500) {
+  valorMensalRenovacao = 5000;   // Pequeno (1 linha)
+} else if (valorOriginal <= 17000) {
+  valorMensalRenovacao = 10000;  // Médio (2-3 linhas)
+} else if (valorOriginal <= 25500) {
+  valorMensalRenovacao = 15000;  // Grande (4-5 linhas)
+} else {
+  valorMensalRenovacao = 20000;  // Premium (6+ linhas)
+}
+
+// Sobrescrever o valor mensal
+dados.valor_mensal = valorMensalRenovacao;
+
+
     if (!dados.data_termino_contrato_original) {
       return res.status(400).json({ erro: "Data de término do contrato original é obrigatória" });
     }
