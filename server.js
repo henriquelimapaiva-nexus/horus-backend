@@ -4162,10 +4162,13 @@ app.delete("/api/companies/:id", autenticarToken, async (req, res) => {
       DELETE FROM contratos_fase1 WHERE empresa_id = $1
     `, [id]);
 
-    // 12. Remover análises de linha
-    await client.query(`
-      DELETE FROM analise_linha WHERE empresa_id = $1
-    `, [id]);
+// 12. Remover análises de linha (se a tabela existir e tiver empresa_id)
+// Se a tabela analise_linha não tiver empresa_id, remova ou comente esta linha
+try {
+  await client.query(`DELETE FROM analise_linha WHERE empresa_id = $1`, [id]);
+} catch (err) {
+  console.log("⚠️ Tabela analise_linha não tem empresa_id, ignorando...");
+}
 
     // 13. Remover elementos de trabalho
     await client.query(`
