@@ -5457,6 +5457,2091 @@ app.delete("/api/manutencao/registros/:id", autenticarToken, async (req, res) =>
 });
 
 // ========================================
+// 📊 MÓDULO: CONFIABILIDADE (MTBF / MTTR)
+// ========================================
+
+/**
+ * CLASSIFICADORES INTERNOS DE CONFIABILIDADE
+ * Limiares baseados em padrões industriais — não variam por cliente
+ * MTBF (Mean Time Between Failures): tempo médio entre falhas
+ * MTTR (Mean Time To Repair): tempo médio de reparo
+ */
+const LIMIARES_CONFIABILIDADE = {
+  mttr: {
+    bom: 30,      // < 30 min = bom
+    atencao: 120  // 30–120 min = atenção | > 120 min = crítico
+  },
+  mtbf: {
+    critico: 120, // < 120 min = crítico
+    atencao: 480  // 120–480 min = atenção | > 480 min = bom
+  }
+};
+
+function classificarMTTR(mttr) {
+  if (mttr === 0) return { label: 'Sem dados suficientes', slug: 'gray' };
+  if (mttr < LIMIARES_CONFIABILIDADE.mttr.bom) {
+    return { label: 'Tempo de reparo adequado', slug: 'green' };
+  }
+  if (mttr < LIMIARES_CONFIABILIDADE.mttr.atencao) {
+    return { label: 'Tempo de reparo elevado — revisar processo de manutenção', slug: 'yellow' };
+  }
+  return { label: 'Tempo de reparo crítico — intervenção necessária', slug: 'red' };
+}
+
+function classificarMTBF(mtbf) {
+  if (mtbf === 0) return { label: 'Sem dados suficientes', slug: 'gray' };
+  if (mtbf < LIMIARES_CONFIABILIDADE.mtbf.critico) {
+    return { label: 'Frequência de falhas crítica — equipamento instável', slug: 'red' };
+  }
+  if (mtbf < LIMIARES_CONFIABILIDADE.mtbf.atencao) {
+    return { label: 'Frequência de falhas elevada — plano preventivo recomendado', slug: 'yellow' };
+  }
+  return { label: 'Frequência de falhas adequada', slug: 'green' };
+}
+
+/**
+ * FUNÇÃO CENTRAL DE CÁLCULO
+ * Recebe array de registros de manutenção e período em horas
+ * Retorna todas as métricas de confiabilidade
+ */
+function calcularConfiabilidade(registros, periodoHoras) {
+  const TIPOS_FALHA = ['corretiva', 'quebra', 'corretiva_emergencial'];
+  const falhas = registros.filter(r => TIPOS_FALHA.includes(r.tipo));
+  const totalFalhas = falhas.length;
+
+  if (totalFalhas === 0) {
+    return {
+      total_registros: registros.length,
+      total_falhas: 0,
+      tempo_total_parada_min: 0,
+      tempo_total_reparo_min: 0,
+      mtbf_minutos: 0,
+      mtbf_horas: 0,
+      mttr_minutos: 0,
+      taxa_falha: 0,
+      disponibilidade_calculada: 100
+    };
+  }
+
+  const tempoTotalReparo = falhas.reduce(
+    (acc, r) => acc + (parseFloat(r.tempo_reparo_min) || 0), 0
+  );
+  const tempoTotalParada = registros.reduce(
+    (acc, r) => acc + (parseFloat(r.tempo_parada_min) || 0), 0
+  );
+
+  const periodoMinutos = periodoHoras * 60;
+  const tempoOperando = Math.max(0, periodoMinutos - tempoTotalParada);
+  const mtbf = totalFalhas > 0 ? tempoOperando / totalFalhas : periodoMinutos;
+  const mttr = totalFalhas > 0 ? tempoTotalReparo / totalFalhas : 0;
+  const taxaFalha = mtbf > 0 ? 1 / mtbf : 0;
+  const disponibilidade = periodoMinutos > 0
+    ? (tempoOperando / periodoMinutos) * 100
+    : 100;
+
+  return {
+    total_registros: registros.length,
+    total_falhas: totalFalhas,
+    tempo_total_parada_min: parseFloat(tempoTotalParada.toFixed(2)),
+    tempo_total_reparo_min: parseFloat(tempoTotalReparo.toFixed(2)),
+    mtbf_minutos: parseFloat(mtbf.toFixed(2)),
+    mtbf_horas: parseFloat((mtbf / 60).toFixed(2)),
+    mttr_minutos: parseFloat(mttr.toFixed(2)),
+    taxa_falha: parseFloat(taxaFalha.toFixed(6)),
+    disponibilidade_calculada: parseFloat(disponibilidade.toFixed(2))
+  };
+}
+
+/**
+ * HELPER: calcula período em horas entre datas
+ */
+function calcularPeriodoHoras(registros, dataInicio, dataFim, horasDia) {
+  if (registros.length === 0) return 0;
+  const inicio = new Date(dataInicio || registros[0].data);
+  const fim = new Date(dataFim || registros[registros.length - 1].data);
+  const dias = Math.max(1, Math.ceil((fim - inicio) / (1000 * 60 * 60 * 24)) + 1);
+  return dias * (parseFloat(horasDia) || 8.8);
+}
+
+// ----------------------------------------
+// 1️⃣ CONFIABILIDADE POR POSTO
+// Calcula MTBF e MTTR de um posto específico
+// Rota: GET /api/confiabilidade/posto/:postoId
+// Query params: data_inicio, data_fim (YYYY-MM-DD)
+// ----------------------------------------
+app.get("/api/confiabilidade/posto/:postoId", autenticarToken, async (req, res) => {
+  const { postoId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    // Buscar dados do posto e horas disponíveis da linha
+    const postoRes = await pool.query(`
+      SELECT pt.*, l.horas_disponiveis
+      FROM posto_trabalho pt
+      JOIN linhas_producao l ON l.id = pt.linha_id
+      WHERE pt.id = $1
+    `, [postoId]);
+
+    if (postoRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Posto não encontrado" });
+    }
+
+    const posto = postoRes.rows[0];
+
+    // Buscar registros de manutenção com filtro de data opcional
+    let query = "SELECT * FROM manutencao_registros WHERE posto_id = $1";
+    const values = [postoId];
+    let idx = 2;
+
+    if (data_inicio) { query += ` AND data >= $${idx}`; values.push(data_inicio); idx++; }
+    if (data_fim)    { query += ` AND data <= $${idx}`; values.push(data_fim);    idx++; }
+
+    query += " ORDER BY data ASC";
+    const registrosRes = await pool.query(query, values);
+    const registros = registrosRes.rows;
+
+    // Calcular período e métricas
+    const periodoHoras = calcularPeriodoHoras(
+      registros, data_inicio, data_fim, posto.horas_disponiveis
+    );
+    const metricas = calcularConfiabilidade(registros, periodoHoras);
+
+    // Classificar
+    const classifMTBF = classificarMTBF(metricas.mtbf_minutos);
+    const classifMTTR = classificarMTTR(metricas.mttr_minutos);
+    const statusGeral = (classifMTBF.slug === 'red' || classifMTTR.slug === 'red') ? 'red' :
+                        (classifMTBF.slug === 'yellow' || classifMTTR.slug === 'yellow') ? 'yellow' :
+                        metricas.total_falhas === 0 ? 'gray' : 'green';
+
+    // Tipo de falha mais frequente
+    const tiposFreq = registros.reduce((acc, r) => {
+      acc[r.tipo] = (acc[r.tipo] || 0) + 1;
+      return acc;
+    }, {});
+    const tipoMaisFrequente = Object.entries(tiposFreq)
+      .sort((a, b) => b[1] - a[1])[0];
+
+    // Ação recomendada
+    let acaoRecomendada = "Manter monitoramento periódico.";
+    if (statusGeral === 'red') {
+      acaoRecomendada = "Implementar plano de manutenção preventiva urgente e revisar procedimento de reparo.";
+    } else if (statusGeral === 'yellow') {
+      acaoRecomendada = "Revisar frequência da manutenção preventiva e capacitar equipe de manutenção.";
+    }
+
+    res.status(200).json({
+      posto_id: parseInt(postoId),
+      posto_nome: posto.nome,
+      periodo_analisado: {
+        data_inicio: data_inicio || "início dos registros",
+        data_fim: data_fim || "último registro",
+        horas_totais: parseFloat(periodoHoras.toFixed(2))
+      },
+      metricas,
+      classificacao: {
+        mtbf: {
+          ...classifMTBF,
+          referencia: "Bom: MTBF > 480 min | Atenção: 120–480 min | Crítico: < 120 min"
+        },
+        mttr: {
+          ...classifMTTR,
+          referencia: "Bom: MTTR < 30 min | Atenção: 30–120 min | Crítico: > 120 min"
+        },
+        status_geral: statusGeral
+      },
+      tipo_falha_mais_frequente: tipoMaisFrequente
+        ? { tipo: tipoMaisFrequente[0], ocorrencias: tipoMaisFrequente[1] }
+        : null,
+      acao_recomendada: acaoRecomendada
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na confiabilidade do posto:", error.message);
+    res.status(500).json({ erro: "Falha ao calcular confiabilidade do posto" });
+  }
+});
+
+// ----------------------------------------
+// 2️⃣ CONFIABILIDADE POR LINHA
+// Agrega MTBF e MTTR de todos os postos de uma linha
+// Rota: GET /api/confiabilidade/linha/:linhaId
+// Query params: data_inicio, data_fim (YYYY-MM-DD)
+// ----------------------------------------
+app.get("/api/confiabilidade/linha/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    // Buscar postos da linha
+    const postosRes = await pool.query(`
+      SELECT pt.*, l.horas_disponiveis
+      FROM posto_trabalho pt
+      JOIN linhas_producao l ON l.id = pt.linha_id
+      WHERE pt.linha_id = $1
+      ORDER BY pt.ordem_fluxo ASC
+    `, [linhaId]);
+
+    if (postosRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Nenhum posto encontrado para esta linha" });
+    }
+
+    const horasDia = parseFloat(postosRes.rows[0].horas_disponiveis) || 8.8;
+
+    // Buscar todos os registros de manutenção da linha
+    let query = `
+      SELECT mr.*
+      FROM manutencao_registros mr
+      JOIN posto_trabalho pt ON pt.id = mr.posto_id
+      WHERE pt.linha_id = $1
+    `;
+    const values = [linhaId];
+    let idx = 2;
+
+    if (data_inicio) { query += ` AND mr.data >= $${idx}`; values.push(data_inicio); idx++; }
+    if (data_fim)    { query += ` AND mr.data <= $${idx}`; values.push(data_fim);    idx++; }
+
+    query += " ORDER BY mr.data ASC";
+    const registrosRes = await pool.query(query, values);
+    const registros = registrosRes.rows;
+
+    // Período e métricas globais
+    const periodoHoras = calcularPeriodoHoras(registros, data_inicio, data_fim, horasDia);
+    const metricasGlobais = calcularConfiabilidade(registros, periodoHoras);
+
+    // Detalhamento por posto
+    const detalhamentoPorPosto = postosRes.rows.map(posto => {
+      const registrosPosto = registros.filter(r => r.posto_id === posto.id);
+      const metricas = calcularConfiabilidade(registrosPosto, periodoHoras);
+      const classifMTBF = classificarMTBF(metricas.mtbf_minutos);
+      const classifMTTR = classificarMTTR(metricas.mttr_minutos);
+      const statusGeral = metricas.total_falhas === 0 ? 'gray' :
+        (classifMTBF.slug === 'red' || classifMTTR.slug === 'red') ? 'red' :
+        (classifMTBF.slug === 'yellow' || classifMTTR.slug === 'yellow') ? 'yellow' : 'green';
+
+      return {
+        posto_id: posto.id,
+        posto_nome: posto.nome,
+        ordem_fluxo: posto.ordem_fluxo,
+        total_falhas: metricas.total_falhas,
+        mtbf_horas: metricas.mtbf_horas,
+        mttr_minutos: metricas.mttr_minutos,
+        disponibilidade_percentual: metricas.disponibilidade_calculada,
+        status_geral: statusGeral,
+        classificacao_mtbf: classifMTBF.label,
+        classificacao_mttr: classifMTTR.label
+      };
+    });
+
+    // Posto mais crítico (menor MTBF com pelo menos 1 falha)
+    const postoCritico = detalhamentoPorPosto
+      .filter(p => p.total_falhas > 0)
+      .sort((a, b) => a.mtbf_horas - b.mtbf_horas)[0] || null;
+
+    const classifGeral = classificarMTBF(metricasGlobais.mtbf_minutos);
+    const statusGeral = metricasGlobais.total_falhas === 0 ? 'gray' :
+      detalhamentoPorPosto.some(p => p.status_geral === 'red') ? 'red' :
+      detalhamentoPorPosto.some(p => p.status_geral === 'yellow') ? 'yellow' : 'green';
+
+    res.status(200).json({
+      linha_id: parseInt(linhaId),
+      periodo_analisado: {
+        data_inicio: data_inicio || "início dos registros",
+        data_fim: data_fim || "último registro",
+        horas_totais: parseFloat(periodoHoras.toFixed(2))
+      },
+      metricas_globais: metricasGlobais,
+      classificacao_geral: {
+        ...classifGeral,
+        status_geral: statusGeral,
+        referencia: "MTBF > 480 min = bom | 120–480 min = atenção | < 120 min = crítico"
+      },
+      posto_mais_critico: postoCritico,
+      detalhamento_por_posto: detalhamentoPorPosto,
+      acao_recomendada: postoCritico && statusGeral !== 'green'
+        ? `Priorizar manutenção preventiva no posto "${postoCritico.posto_nome}" — maior fonte de falhas da linha.`
+        : "Manter frequência de manutenção preventiva atual."
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na confiabilidade da linha:", error.message);
+    res.status(500).json({ erro: "Falha ao calcular confiabilidade da linha" });
+  }
+});
+
+// ----------------------------------------
+// 3️⃣ RANKING DE CONFIABILIDADE POR EMPRESA
+// Ordena todos os postos do mais crítico ao mais estável
+// Rota: GET /api/confiabilidade/ranking/:empresaId
+// Query params: data_inicio, data_fim (YYYY-MM-DD)
+// ----------------------------------------
+app.get("/api/confiabilidade/ranking/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    // Agregar registros de manutenção por posto, já com totais calculados pelo banco
+    let query = `
+      SELECT
+        pt.id                                                          AS posto_id,
+        pt.nome                                                        AS posto_nome,
+        l.id                                                           AS linha_id,
+        l.nome                                                         AS linha_nome,
+        l.horas_disponiveis,
+        COUNT(mr.id)                                                   AS total_registros,
+        COUNT(mr.id) FILTER (WHERE mr.tipo IN (
+          'corretiva', 'quebra', 'corretiva_emergencial'))             AS total_falhas,
+        COALESCE(SUM(mr.tempo_parada_min), 0)                         AS tempo_total_parada,
+        COALESCE(SUM(mr.tempo_reparo_min) FILTER (WHERE mr.tipo IN (
+          'corretiva', 'quebra', 'corretiva_emergencial')), 0)         AS tempo_total_reparo,
+        MIN(mr.data)                                                   AS primeira_data,
+        MAX(mr.data)                                                   AS ultima_data
+      FROM posto_trabalho pt
+      JOIN linhas_producao l ON l.id = pt.linha_id
+      LEFT JOIN manutencao_registros mr ON mr.posto_id = pt.id
+    `;
+
+    const values = [empresaId];
+    let idx = 2;
+    query += " WHERE l.empresa_id = $1";
+
+    if (data_inicio) {
+      query += ` AND (mr.data >= $${idx} OR mr.data IS NULL)`;
+      values.push(data_inicio); idx++;
+    }
+    if (data_fim) {
+      query += ` AND (mr.data <= $${idx} OR mr.data IS NULL)`;
+      values.push(data_fim); idx++;
+    }
+
+    query += " GROUP BY pt.id, pt.nome, l.id, l.nome, l.horas_disponiveis ORDER BY total_falhas DESC";
+
+    const result = await pool.query(query, values);
+
+    // Calcular métricas e classificar cada posto
+    const ranking = result.rows.map(posto => {
+      const totalFalhas    = parseInt(posto.total_falhas)    || 0;
+      const tempoParada    = parseFloat(posto.tempo_total_parada)  || 0;
+      const tempoReparo    = parseFloat(posto.tempo_total_reparo)  || 0;
+      const horasDia       = parseFloat(posto.horas_disponiveis)   || 8.8;
+
+      let periodoMinutos = 0;
+      if (posto.primeira_data) {
+        const dias = Math.max(1, Math.ceil(
+          (new Date(posto.ultima_data) - new Date(posto.primeira_data))
+          / (1000 * 60 * 60 * 24)
+        ) + 1);
+        periodoMinutos = dias * horasDia * 60;
+      }
+
+      const tempoOperando  = Math.max(0, periodoMinutos - tempoParada);
+      const mtbf           = totalFalhas > 0 && periodoMinutos > 0
+                             ? tempoOperando / totalFalhas : 0;
+      const mttr           = totalFalhas > 0 ? tempoReparo / totalFalhas : 0;
+      const disponibilidade = periodoMinutos > 0
+                              ? (tempoOperando / periodoMinutos) * 100 : 100;
+
+      const classifMTBF = classificarMTBF(mtbf);
+      const classifMTTR = classificarMTTR(mttr);
+      const statusGeral = totalFalhas === 0 ? 'gray' :
+        (classifMTBF.slug === 'red' || classifMTTR.slug === 'red') ? 'red' :
+        (classifMTBF.slug === 'yellow' || classifMTTR.slug === 'yellow') ? 'yellow' : 'green';
+
+      return {
+        posto_id:                   posto.posto_id,
+        posto_nome:                 posto.posto_nome,
+        linha_id:                   posto.linha_id,
+        linha_nome:                 posto.linha_nome,
+        total_falhas:               totalFalhas,
+        mtbf_horas:                 parseFloat((mtbf / 60).toFixed(2)),
+        mttr_minutos:               parseFloat(mttr.toFixed(2)),
+        disponibilidade_percentual: parseFloat(disponibilidade.toFixed(2)),
+        status_geral:               statusGeral,
+        classificacao_mtbf:         classifMTBF.label,
+        classificacao_mttr:         classifMTTR.label
+      };
+    });
+
+    const criticos = ranking.filter(p => p.status_geral === 'red');
+    const atencao  = ranking.filter(p => p.status_geral === 'yellow');
+    const estaveis = ranking.filter(p => p.status_geral === 'green');
+
+    res.status(200).json({
+      empresa_id: parseInt(empresaId),
+      total_postos_analisados: ranking.length,
+      resumo: {
+        criticos: criticos.length,
+        atencao:  atencao.length,
+        estaveis: estaveis.length
+      },
+      ranking_completo: ranking,
+      postos_criticos:  criticos,
+      postos_atencao:   atencao,
+      referencias: {
+        mtbf_bom:      "MTBF > 8 horas",
+        mtbf_atencao:  "MTBF entre 2h e 8h",
+        mtbf_critico:  "MTBF < 2 horas",
+        mttr_bom:      "MTTR < 30 minutos",
+        mttr_atencao:  "MTTR entre 30 e 120 minutos",
+        mttr_critico:  "MTTR > 120 minutos"
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro no ranking de confiabilidade:", error.message);
+    res.status(500).json({ erro: "Falha ao gerar ranking de confiabilidade" });
+  }
+});
+
+// ========================================
+// 📊 MÓDULO: CAPABILIDADE DE PROCESSO (Cp / Cpk)
+// ========================================
+
+/**
+ * LIMIARES ISO PARA ÍNDICES DE CAPABILIDADE
+ * Baseados na norma ISO 22514 / AIAG — não variam por cliente
+ *
+ * Cp  = (LSE - LIE) / (6σ)           → mede se o processo CABE na tolerância
+ * Cpk = min(CPU, CPL)                 → mede se o processo está CENTRADO
+ * CPU = (LSE - média) / (3σ)
+ * CPL = (média - LIE) / (3σ)
+ */
+const LIMIARES_CAPABILIDADE = {
+  incapaz:   1.00,   // Cp/Cpk < 1.00 → processo incapaz (gera defeitos)
+  marginal:  1.33,   // 1.00 ≤ Cp/Cpk < 1.33 → capaz mas sem margem
+  bom:       1.67,   // 1.33 ≤ Cp/Cpk < 1.67 → bom
+  excelente: 1.67    // Cp/Cpk ≥ 1.67 → excelente (Six Sigma)
+};
+
+function classificarCapabilidade(valor) {
+  if (valor === null || isNaN(valor)) {
+    return {
+      label: 'Sem dados suficientes ou limites não informados',
+      slug:  'gray',
+      descricao: 'Informe os limites superior e inferior nas medições para calcular o índice.'
+    };
+  }
+  if (valor < LIMIARES_CAPABILIDADE.incapaz) {
+    return {
+      label:    'Processo INCAPAZ — gerando defeitos fora da tolerância',
+      slug:     'red',
+      descricao: `Cp/Cpk = ${valor.toFixed(3)} está abaixo de 1.00. O processo não consegue atender a especificação. Ação imediata necessária.`
+    };
+  }
+  if (valor < LIMIARES_CAPABILIDADE.marginal) {
+    return {
+      label:    'Processo CAPAZ mas sem margem de segurança',
+      slug:     'yellow',
+      descricao: `Cp/Cpk = ${valor.toFixed(3)} está entre 1.00 e 1.33. O processo atende a especificação, mas qualquer variação pode gerar defeitos.`
+    };
+  }
+  if (valor < LIMIARES_CAPABILIDADE.excelente) {
+    return {
+      label:    'Processo BOM — dentro da tolerância com margem',
+      slug:     'blue',
+      descricao: `Cp/Cpk = ${valor.toFixed(3)} está entre 1.33 e 1.67. Processo estável e capaz. Manter monitoramento.`
+    };
+  }
+  return {
+    label:    'Processo EXCELENTE — nível Six Sigma',
+    slug:     'green',
+    descricao: `Cp/Cpk = ${valor.toFixed(3)} está acima de 1.67. Processo altamente capaz e centrado.`
+  };
+}
+
+/**
+ * FUNÇÃO CENTRAL DE CÁLCULO DE CAPABILIDADE
+ * Recebe array de valores medidos + LSE + LIE
+ * Retorna Cp, Cpk, CPU, CPL, desvio padrão, média e demais estatísticas
+ */
+function calcularIndicesCapabilidade(valores, lse, lie) {
+  const n = valores.length;
+
+  // Mínimo estatístico recomendado: 25 amostras
+  if (n < 5) {
+    return { valido: false, motivo: `Amostras insuficientes: ${n} medições. Mínimo recomendado: 25.` };
+  }
+
+  const toleranciaDefinida = lse !== null && lie !== null &&
+                              !isNaN(lse) && !isNaN(lie) &&
+                              lse > lie;
+
+  const soma  = valores.reduce((a, b) => a + b, 0);
+  const media = soma / n;
+
+  // Desvio padrão amostral (n-1)
+  const variancia    = valores.reduce((acc, v) => acc + Math.pow(v - media, 2), 0) / (n - 1);
+  const desvioPadrao = Math.sqrt(variancia);
+
+  const resultado = {
+    valido:          true,
+    n,
+    media:           parseFloat(media.toFixed(6)),
+    desvio_padrao:   parseFloat(desvioPadrao.toFixed(6)),
+    minimo:          parseFloat(Math.min(...valores).toFixed(6)),
+    maximo:          parseFloat(Math.max(...valores).toFixed(6)),
+    amplitude:       parseFloat((Math.max(...valores) - Math.min(...valores)).toFixed(6)),
+    cp:              null,
+    cpk:             null,
+    cpu:             null,
+    cpl:             null,
+    lse,
+    lie,
+    tolerancia_definida: toleranciaDefinida,
+    alerta_amostras: n < 25
+      ? `⚠️ Resultado indicativo: ${n} amostras. Para confiabilidade estatística, use ≥ 25 medições.`
+      : null
+  };
+
+  if (!toleranciaDefinida || desvioPadrao === 0) {
+    resultado.motivo_sem_indice = desvioPadrao === 0
+      ? 'Desvio padrão zero — todas as medições são idênticas.'
+      : 'Limites superior e inferior não definidos ou inválidos.';
+    return resultado;
+  }
+
+  const tol = lse - lie;
+  const cp  = tol / (6 * desvioPadrao);
+  const cpu = (lse - media) / (3 * desvioPadrao);
+  const cpl = (media - lie) / (3 * desvioPadrao);
+  const cpk = Math.min(cpu, cpl);
+
+  resultado.cp  = parseFloat(cp.toFixed(4));
+  resultado.cpk = parseFloat(cpk.toFixed(4));
+  resultado.cpu = parseFloat(cpu.toFixed(4));
+  resultado.cpl = parseFloat(cpl.toFixed(4));
+
+  // % do processo dentro da tolerância (estimativa normal)
+  const z = Math.min(cpu, cpl) * 3;
+  // Usando aproximação da função de distribuição normal cumulativa
+  const ppm_estimado = z >= 6 ? 3.4 : null; // só mostra PPM para Six Sigma
+  resultado.ppm_estimado = ppm_estimado;
+
+  return resultado;
+}
+
+// ----------------------------------------
+// 1️⃣ CAPABILIDADE POR CARACTERÍSTICA E POSTO
+// Calcula Cp e Cpk de uma característica específica em um posto
+// Rota: GET /api/capabilidade/posto/:postoId
+// Query params: caracteristica (obrigatório), data_inicio, data_fim, produto_id
+// ----------------------------------------
+app.get("/api/capabilidade/posto/:postoId", autenticarToken, async (req, res) => {
+  const { postoId } = req.params;
+  const { caracteristica, data_inicio, data_fim, produto_id } = req.query;
+
+  if (!caracteristica) {
+    return res.status(400).json({
+      erro: "O parâmetro 'caracteristica' é obrigatório.",
+      dica: "Exemplo: ?caracteristica=diametro_furo&data_inicio=2025-01-01"
+    });
+  }
+
+  try {
+    // Verificar se o posto existe
+    const postoRes = await pool.query(
+      "SELECT pt.*, l.nome as linha_nome FROM posto_trabalho pt JOIN linhas_producao l ON l.id = pt.linha_id WHERE pt.id = $1",
+      [postoId]
+    );
+    if (postoRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Posto não encontrado." });
+    }
+    const posto = postoRes.rows[0];
+
+    // Montar query dinâmica com filtros opcionais
+    let query = `
+      SELECT valor_medido, limite_superior, limite_inferior, data, unidade
+      FROM medicoes_qualidade
+      WHERE posto_id = $1 AND LOWER(caracteristica) = LOWER($2)
+    `;
+    const values = [postoId, caracteristica];
+    let idx = 3;
+
+    if (data_inicio)  { query += ` AND data >= $${idx}`; values.push(data_inicio);  idx++; }
+    if (data_fim)     { query += ` AND data <= $${idx}`; values.push(data_fim);      idx++; }
+    if (produto_id)   { query += ` AND produto_id = $${idx}`; values.push(produto_id); idx++; }
+
+    query += " ORDER BY data ASC";
+    const medicoesRes = await pool.query(query, values);
+
+    if (medicoesRes.rows.length === 0) {
+      return res.status(404).json({
+        erro: "Nenhuma medição encontrada para esta característica neste posto.",
+        dica: "Verifique o nome da característica ou o período informado."
+      });
+    }
+
+    const medições = medicoesRes.rows;
+    const valores  = medições.map(m => parseFloat(m.valor_medido));
+    const lse      = medições.find(m => m.limite_superior !== null)?.limite_superior ?? null;
+    const lie      = medições.find(m => m.limite_inferior !== null)?.limite_inferior ?? null;
+    const unidade  = medições[0].unidade || "";
+
+    const indices  = calcularIndicesCapabilidade(
+      valores,
+      lse !== null ? parseFloat(lse) : null,
+      lie !== null ? parseFloat(lie) : null
+    );
+
+    if (!indices.valido) {
+      return res.status(422).json({ erro: indices.motivo });
+    }
+
+    const classifCp  = classificarCapabilidade(indices.cp);
+    const classifCpk = classificarCapabilidade(indices.cpk);
+
+    // Ação recomendada baseada no pior índice
+    const piorSlug = [classifCp.slug, classifCpk.slug].includes('red') ? 'red' :
+                     [classifCp.slug, classifCpk.slug].includes('yellow') ? 'yellow' : classifCp.slug;
+
+    const acaoRecomendada =
+      piorSlug === 'red'
+        ? "Investigar causa raiz imediatamente. Verificar setup, desgaste de ferramenta e calibração do instrumento de medição."
+        : piorSlug === 'yellow'
+        ? "Reduzir variabilidade. Verificar padronização do método de operação e condições do processo."
+        : "Manter monitoramento periódico. Registrar pelo menos 25 medições por período de análise.";
+
+    res.status(200).json({
+      posto_id:     parseInt(postoId),
+      posto_nome:   posto.nome,
+      linha_nome:   posto.linha_nome,
+      caracteristica,
+      unidade,
+      periodo_analisado: {
+        data_inicio: data_inicio || medições[0].data,
+        data_fim:    data_fim    || medições[medições.length - 1].data
+      },
+      estatisticas: {
+        n:            indices.n,
+        media:        indices.media,
+        desvio_padrao:indices.desvio_padrao,
+        minimo:       indices.minimo,
+        maximo:       indices.maximo,
+        amplitude:    indices.amplitude,
+        lse:          indices.lse,
+        lie:          indices.lie
+      },
+      indices_capabilidade: {
+        cp:  indices.cp,
+        cpk: indices.cpk,
+        cpu: indices.cpu,
+        cpl: indices.cpl
+      },
+      classificacao: {
+        cp:  classifCp,
+        cpk: classifCpk,
+        status_geral: piorSlug,
+        referencia: "Cp/Cpk < 1.00 = incapaz | 1.00–1.33 = marginal | 1.33–1.67 = bom | ≥ 1.67 = excelente (ISO 22514)"
+      },
+      alertas: [
+        indices.alerta_amostras,
+        indices.motivo_sem_indice,
+        indices.cpk !== null && indices.cp !== null && (indices.cp - indices.cpk) > 0.3
+          ? `⚠️ Processo descentrado: diferença entre Cp (${indices.cp}) e Cpk (${indices.cpk}) > 0.3. Verificar ajuste de setup.`
+          : null
+      ].filter(Boolean),
+      acao_recomendada: acaoRecomendada
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na capabilidade do posto:", error.message);
+    res.status(500).json({ erro: "Falha ao calcular índices de capabilidade." });
+  }
+});
+
+// ----------------------------------------
+// 2️⃣ CAPABILIDADE POR LINHA
+// Retorna Cp e Cpk de TODAS as características medidas na linha
+// Rota: GET /api/capabilidade/linha/:linhaId
+// Query params: data_inicio, data_fim
+// ----------------------------------------
+app.get("/api/capabilidade/linha/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    // Buscar todas as medições da linha, agrupadas por posto + característica
+    let query = `
+      SELECT
+        mq.posto_id,
+        pt.nome                          AS posto_nome,
+        mq.caracteristica,
+        mq.unidade,
+        ARRAY_AGG(mq.valor_medido::FLOAT ORDER BY mq.data) AS valores,
+        MAX(mq.limite_superior::FLOAT)   AS lse,
+        MAX(mq.limite_inferior::FLOAT)   AS lie,
+        COUNT(*)                         AS n
+      FROM medicoes_qualidade mq
+      JOIN posto_trabalho pt ON pt.id = mq.posto_id
+      WHERE pt.linha_id = $1
+    `;
+    const values = [linhaId];
+    let idx = 2;
+
+    if (data_inicio) { query += ` AND mq.data >= $${idx}`; values.push(data_inicio); idx++; }
+    if (data_fim)    { query += ` AND mq.data <= $${idx}`; values.push(data_fim);    idx++; }
+
+    query += " GROUP BY mq.posto_id, pt.nome, mq.caracteristica, mq.unidade ORDER BY pt.nome, mq.caracteristica";
+
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        erro: "Nenhuma medição de qualidade encontrada para esta linha.",
+        dica: "Registre medições dimensionais com limites superior e inferior definidos."
+      });
+    }
+
+    // Calcular índices para cada combinação posto × característica
+    const analises = result.rows.map(row => {
+      const valores = row.valores.map(v => parseFloat(v));
+      const indices = calcularIndicesCapabilidade(
+        valores,
+        row.lse !== null ? parseFloat(row.lse) : null,
+        row.lie !== null ? parseFloat(row.lie) : null
+      );
+
+      const classifCpk = classificarCapabilidade(indices.cpk);
+      const statusGeral = indices.valido
+        ? classifCpk.slug
+        : 'gray';
+
+      return {
+        posto_id:      row.posto_id,
+        posto_nome:    row.posto_nome,
+        caracteristica: row.caracteristica,
+        unidade:       row.unidade,
+        n:             parseInt(row.n),
+        cp:            indices.cp,
+        cpk:           indices.cpk,
+        media:         indices.media,
+        desvio_padrao: indices.desvio_padrao,
+        lse:           indices.lse,
+        lie:           indices.lie,
+        status_geral:  statusGeral,
+        classificacao: classifCpk.label,
+        alerta:        indices.alerta_amostras || indices.motivo_sem_indice || null
+      };
+    });
+
+    // Resumo por status
+    const resumo = {
+      total_caracteristicas: analises.length,
+      incapazes:  analises.filter(a => a.status_geral === 'red').length,
+      marginais:  analises.filter(a => a.status_geral === 'yellow').length,
+      boas:       analises.filter(a => a.status_geral === 'blue').length,
+      excelentes: analises.filter(a => a.status_geral === 'green').length,
+      sem_dados:  analises.filter(a => a.status_geral === 'gray').length
+    };
+
+    // Pior característica (menor Cpk válido)
+    const comCpk = analises.filter(a => a.cpk !== null);
+    const piorCaracteristica = comCpk.sort((a, b) => a.cpk - b.cpk)[0] || null;
+
+    const statusLinhaGeral =
+      resumo.incapazes > 0  ? 'red'    :
+      resumo.marginais  > 0  ? 'yellow' :
+      resumo.boas       > 0  ? 'blue'   :
+      resumo.excelentes > 0  ? 'green'  : 'gray';
+
+    res.status(200).json({
+      linha_id: parseInt(linhaId),
+      periodo_analisado: {
+        data_inicio: data_inicio || "início dos registros",
+        data_fim:    data_fim    || "último registro"
+      },
+      resumo,
+      status_geral_linha: statusLinhaGeral,
+      pior_caracteristica: piorCaracteristica,
+      analise_por_caracteristica: analises,
+      acao_recomendada:
+        statusLinhaGeral === 'red'
+          ? `Característica crítica: "${piorCaracteristica?.caracteristica}" no posto "${piorCaracteristica?.posto_nome}". Iniciar análise de causa raiz imediatamente.`
+          : statusLinhaGeral === 'yellow'
+          ? "Reduzir variabilidade nas características marginais. Revisar padronização de método e condições de processo."
+          : "Processo dentro dos padrões de qualidade. Manter frequência de medição.",
+      referencia: "ISO 22514 | Cpk < 1.00 = incapaz | 1.00–1.33 = marginal | 1.33–1.67 = bom | ≥ 1.67 = excelente"
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na capabilidade da linha:", error.message);
+    res.status(500).json({ erro: "Falha ao calcular capabilidade da linha." });
+  }
+});
+
+// ----------------------------------------
+// 3️⃣ RANKING DE CAPABILIDADE POR EMPRESA
+// Lista todas as características de todas as linhas, do mais crítico ao mais capaz
+// Rota: GET /api/capabilidade/ranking/:empresaId
+// Query params: data_inicio, data_fim
+// ----------------------------------------
+app.get("/api/capabilidade/ranking/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    let query = `
+      SELECT
+        mq.posto_id,
+        pt.nome                          AS posto_nome,
+        l.id                             AS linha_id,
+        l.nome                           AS linha_nome,
+        mq.caracteristica,
+        mq.unidade,
+        ARRAY_AGG(mq.valor_medido::FLOAT ORDER BY mq.data) AS valores,
+        MAX(mq.limite_superior::FLOAT)   AS lse,
+        MAX(mq.limite_inferior::FLOAT)   AS lie,
+        COUNT(*)                         AS n
+      FROM medicoes_qualidade mq
+      JOIN posto_trabalho pt ON pt.id = mq.posto_id
+      JOIN linhas_producao l ON l.id = pt.linha_id
+      WHERE l.empresa_id = $1
+    `;
+    const values = [empresaId];
+    let idx = 2;
+
+    if (data_inicio) { query += ` AND mq.data >= $${idx}`; values.push(data_inicio); idx++; }
+    if (data_fim)    { query += ` AND mq.data <= $${idx}`; values.push(data_fim);    idx++; }
+
+    query += " GROUP BY mq.posto_id, pt.nome, l.id, l.nome, mq.caracteristica, mq.unidade";
+
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        erro: "Nenhuma medição de qualidade encontrada para esta empresa.",
+        dica: "Registre medições dimensionais com limites definidos para gerar o ranking."
+      });
+    }
+
+    // Calcular índices para cada linha do resultado
+    const ranking = result.rows
+      .map(row => {
+        const valores = row.valores.map(v => parseFloat(v));
+        const indices = calcularIndicesCapabilidade(
+          valores,
+          row.lse !== null ? parseFloat(row.lse) : null,
+          row.lie !== null ? parseFloat(row.lie) : null
+        );
+        const classifCpk = classificarCapabilidade(indices.cpk);
+
+        return {
+          posto_id:       row.posto_id,
+          posto_nome:     row.posto_nome,
+          linha_id:       row.linha_id,
+          linha_nome:     row.linha_nome,
+          caracteristica: row.caracteristica,
+          unidade:        row.unidade,
+          n:              parseInt(row.n),
+          cp:             indices.cp,
+          cpk:            indices.cpk,
+          media:          indices.media,
+          desvio_padrao:  indices.desvio_padrao,
+          lse:            indices.lse,
+          lie:            indices.lie,
+          status_geral:   indices.cpk !== null ? classifCpk.slug : 'gray',
+          classificacao:  classifCpk.label
+        };
+      })
+      // Ordenar: incapazes primeiro (Cpk menor), sem índice no final
+      .sort((a, b) => {
+        if (a.cpk === null && b.cpk === null) return 0;
+        if (a.cpk === null) return 1;
+        if (b.cpk === null) return -1;
+        return a.cpk - b.cpk;
+      });
+
+    const resumo = {
+      total_caracteristicas: ranking.length,
+      incapazes:  ranking.filter(r => r.status_geral === 'red').length,
+      marginais:  ranking.filter(r => r.status_geral === 'yellow').length,
+      boas:       ranking.filter(r => r.status_geral === 'blue').length,
+      excelentes: ranking.filter(r => r.status_geral === 'green').length,
+      sem_indice: ranking.filter(r => r.status_geral === 'gray').length
+    };
+
+    res.status(200).json({
+      empresa_id: parseInt(empresaId),
+      periodo_analisado: {
+        data_inicio: data_inicio || "início dos registros",
+        data_fim:    data_fim    || "último registro"
+      },
+      resumo,
+      ranking_completo:       ranking,
+      caracteristicas_criticas: ranking.filter(r => r.status_geral === 'red'),
+      referencias: {
+        cpk_incapaz:   "Cpk < 1.00 — processo gerando defeitos",
+        cpk_marginal:  "Cpk 1.00–1.33 — capaz sem margem de segurança",
+        cpk_bom:       "Cpk 1.33–1.67 — bom",
+        cpk_excelente: "Cpk ≥ 1.67 — nível Six Sigma",
+        norma:         "ISO 22514 / AIAG MSA"
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro no ranking de capabilidade:", error.message);
+    res.status(500).json({ erro: "Falha ao gerar ranking de capabilidade." });
+  }
+});
+
+// ========================================
+// 📊 MÓDULO: ANÁLISE COMPARATIVA POR TURNO
+// ========================================
+
+/**
+ * LIMIARES DE VARIAÇÃO ENTRE TURNOS
+ * Se a diferença de OEE entre o melhor e o pior turno superar
+ * esses limites, o sistema emite alerta automático.
+ * Baseado em benchmarks de manufatura enxuta.
+ */
+const LIMIARES_TURNO = {
+  variacao_oee_atencao:  10,  // diferença > 10 pp entre turnos = atenção
+  variacao_oee_critico:  20,  // diferença > 20 pp entre turnos = crítico
+  oee_minimo_aceitavel:  65,  // OEE abaixo de 65% em qualquer turno = alerta
+  refugo_max_percentual:  3   // refugo acima de 3% da produção = alerta
+};
+
+/**
+ * HELPER: classifica a variação de OEE entre turnos
+ */
+function classificarVariacaoTurno(delta) {
+  if (delta === null || isNaN(delta)) return { label: 'Sem dados', slug: 'gray' };
+  if (delta >= LIMIARES_TURNO.variacao_oee_critico) {
+    return {
+      label: `Variação crítica de ${delta.toFixed(1)} pp entre turnos — investigar causa raiz`,
+      slug: 'red'
+    };
+  }
+  if (delta >= LIMIARES_TURNO.variacao_oee_atencao) {
+    return {
+      label: `Variação elevada de ${delta.toFixed(1)} pp entre turnos — revisar método e treinamento`,
+      slug: 'yellow'
+    };
+  }
+  return {
+    label: `Variação de ${delta.toFixed(1)} pp entre turnos — dentro do aceitável`,
+    slug: 'green'
+  };
+}
+
+/**
+ * HELPER: identifica o turno problema (menor OEE)
+ * e o turno referência (maior OEE)
+ */
+function identificarTurnosExtremos(dadosPorTurno) {
+  const comDados = dadosPorTurno.filter(t => t.registros > 0);
+  if (comDados.length === 0) return { turno_problema: null, turno_referencia: null };
+
+  const pior   = comDados.reduce((a, b) => a.oee_medio < b.oee_medio ? a : b);
+  const melhor = comDados.reduce((a, b) => a.oee_medio > b.oee_medio ? a : b);
+
+  return {
+    turno_referencia: melhor,
+    turno_problema:   pior.turno !== melhor.turno ? pior : null
+  };
+}
+
+/**
+ * HELPER: gera alertas automáticos por turno
+ */
+function gerarAlertas(turno, producaoTotal) {
+  const alertas = [];
+
+  if (turno.oee_medio !== null && turno.oee_medio < LIMIARES_TURNO.oee_minimo_aceitavel) {
+    alertas.push(`OEE de ${turno.oee_medio.toFixed(1)}% está abaixo do mínimo aceitável de ${LIMIARES_TURNO.oee_minimo_aceitavel}%.`);
+  }
+
+  if (producaoTotal > 0 && turno.total_refugo > 0) {
+    const pctRefugo = (turno.total_refugo / producaoTotal) * 100;
+    if (pctRefugo > LIMIARES_TURNO.refugo_max_percentual) {
+      alertas.push(`Refugo de ${pctRefugo.toFixed(2)}% ultrapassa o limite de ${LIMIARES_TURNO.refugo_max_percentual}%.`);
+    }
+  }
+
+  return alertas;
+}
+
+// ----------------------------------------
+// 1️⃣ COMPARATIVO POR TURNO — LINHA
+// OEE, perdas e refugo agrupados por turno em uma linha
+// Rota: GET /api/turnos/linha/:linhaId
+// Query params: data_inicio, data_fim (YYYY-MM-DD)
+// ----------------------------------------
+app.get("/api/turnos/linha/:linhaId", autenticarToken, async (req, res) => {
+  const { linhaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    // Verificar se a linha existe
+    const linhaRes = await pool.query(
+      "SELECT id, nome FROM linhas_producao WHERE id = $1",
+      [linhaId]
+    );
+    if (linhaRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Linha não encontrada." });
+    }
+    const linha = linhaRes.rows[0];
+
+    // ── OEE POR TURNO ──
+    let queryOEE = `
+      SELECT
+        turno,
+        COUNT(*)                              AS registros,
+        ROUND(AVG(oee)::NUMERIC, 2)           AS oee_medio,
+        ROUND(AVG(disponibilidade)::NUMERIC, 2) AS disponibilidade_media,
+        ROUND(AVG(performance)::NUMERIC, 2)   AS performance_media,
+        ROUND(AVG(qualidade)::NUMERIC, 2)     AS qualidade_media,
+        SUM(pecas_produzidas)                 AS total_pecas_produzidas,
+        SUM(pecas_boas)                       AS total_pecas_boas,
+        SUM(pecas_produzidas) - SUM(pecas_boas) AS total_refugo,
+        ROUND(AVG(tempo_operando_min)::NUMERIC, 2) AS tempo_operando_medio_min
+      FROM producao_oee
+      WHERE linha_id = $1
+    `;
+    const valuesOEE = [linhaId];
+    let idx = 2;
+
+    if (data_inicio) { queryOEE += ` AND data >= $${idx}`; valuesOEE.push(data_inicio); idx++; }
+    if (data_fim)    { queryOEE += ` AND data <= $${idx}`; valuesOEE.push(data_fim);    idx++; }
+
+    queryOEE += " GROUP BY turno ORDER BY turno ASC";
+    const oeeRes = await pool.query(queryOEE, valuesOEE);
+
+    // ── DEFEITOS POR TURNO ──
+    let queryDefeitos = `
+      SELECT
+        dq.turno,
+        COUNT(*)          AS ocorrencias_defeitos,
+        SUM(dq.quantidade) AS total_defeitos,
+        MODE() WITHIN GROUP (ORDER BY dq.tipo_defeito) AS tipo_mais_frequente
+      FROM defeitos_qualidade dq
+      JOIN posto_trabalho pt ON pt.id = dq.posto_id
+      WHERE pt.linha_id = $1
+    `;
+    const valuesDefeitos = [linhaId];
+    let idxD = 2;
+
+    if (data_inicio) { queryDefeitos += ` AND dq.data >= $${idxD}`; valuesDefeitos.push(data_inicio); idxD++; }
+    if (data_fim)    { queryDefeitos += ` AND dq.data <= $${idxD}`; valuesDefeitos.push(data_fim);    idxD++; }
+
+    queryDefeitos += " GROUP BY dq.turno ORDER BY dq.turno ASC";
+    const defeitosRes = await pool.query(queryDefeitos, valuesDefeitos);
+
+    // ── PARADAS DE MANUTENÇÃO POR TURNO ──
+    let queryManutencao = `
+      SELECT
+        mr.turno,
+        COUNT(*)                          AS ocorrencias_paradas,
+        SUM(mr.tempo_parada_min)          AS total_parada_min,
+        ROUND(AVG(mr.tempo_parada_min)::NUMERIC, 2) AS media_parada_min
+      FROM manutencao_registros mr
+      JOIN posto_trabalho pt ON pt.id = mr.posto_id
+      WHERE pt.linha_id = $1
+    `;
+    const valuesManut = [linhaId];
+    let idxM = 2;
+
+    if (data_inicio) { queryManutencao += ` AND mr.data >= $${idxM}`; valuesManut.push(data_inicio); idxM++; }
+    if (data_fim)    { queryManutencao += ` AND mr.data <= $${idxM}`; valuesManut.push(data_fim);    idxM++; }
+
+    queryManutencao += " GROUP BY mr.turno ORDER BY mr.turno ASC";
+    const manutencaoRes = await pool.query(queryManutencao, valuesManut);
+
+    // ── CONSOLIDAR DADOS POR TURNO (1, 2 e 3) ──
+    const TURNOS = [1, 2, 3];
+    const totalPecas = oeeRes.rows.reduce(
+      (acc, r) => acc + (parseInt(r.total_pecas_produzidas) || 0), 0
+    );
+
+    const dadosPorTurno = TURNOS.map(t => {
+      const oee      = oeeRes.rows.find(r => parseInt(r.turno) === t);
+      const defeitos = defeitosRes.rows.find(r => parseInt(r.turno) === t);
+      const manut    = manutencaoRes.rows.find(r => parseInt(r.turno) === t);
+
+      const registros          = parseInt(oee?.registros)              || 0;
+      const oee_medio          = oee ? parseFloat(oee.oee_medio)       : null;
+      const total_pecas        = parseInt(oee?.total_pecas_produzidas) || 0;
+      const total_pecas_boas   = parseInt(oee?.total_pecas_boas)       || 0;
+      const total_refugo       = parseInt(oee?.total_refugo)           || 0;
+
+      const turnoObj = {
+        turno:                    t,
+        registros,
+        oee_medio,
+        disponibilidade_media:    oee ? parseFloat(oee.disponibilidade_media)   : null,
+        performance_media:        oee ? parseFloat(oee.performance_media)       : null,
+        qualidade_media:          oee ? parseFloat(oee.qualidade_media)         : null,
+        total_pecas_produzidas:   total_pecas,
+        total_pecas_boas,
+        total_refugo,
+        percentual_refugo:        total_pecas > 0
+          ? parseFloat(((total_refugo / total_pecas) * 100).toFixed(2))
+          : 0,
+        tempo_operando_medio_min: oee ? parseFloat(oee.tempo_operando_medio_min) : null,
+        defeitos: {
+          ocorrencias:       parseInt(defeitos?.ocorrencias_defeitos)  || 0,
+          total_defeitos:    parseInt(defeitos?.total_defeitos)        || 0,
+          tipo_mais_frequente: defeitos?.tipo_mais_frequente           || null
+        },
+        manutencao: {
+          ocorrencias_paradas: parseInt(manut?.ocorrencias_paradas)  || 0,
+          total_parada_min:    parseFloat(manut?.total_parada_min)   || 0,
+          media_parada_min:    parseFloat(manut?.media_parada_min)   || 0
+        },
+        alertas: []
+      };
+
+      // Gerar alertas automáticos
+      turnoObj.alertas = gerarAlertas(turnoObj, totalPecas);
+
+      return turnoObj;
+    });
+
+    // ── ANÁLISE COMPARATIVA ──
+    const { turno_referencia, turno_problema } = identificarTurnosExtremos(dadosPorTurno);
+
+    const oeeValidos = dadosPorTurno
+      .filter(t => t.oee_medio !== null)
+      .map(t => t.oee_medio);
+
+    const deltaOEE = oeeValidos.length >= 2
+      ? parseFloat((Math.max(...oeeValidos) - Math.min(...oeeValidos)).toFixed(2))
+      : null;
+
+    const classifVariacao = classificarVariacaoTurno(deltaOEE);
+
+    // Ação recomendada
+    let acaoRecomendada = "Turnos equilibrados. Manter padronização do método de trabalho.";
+    if (turno_problema && classifVariacao.slug === 'red') {
+      acaoRecomendada = `Turno ${turno_problema.turno} é significativamente inferior ao Turno ${turno_referencia?.turno}. ` +
+        "Investigar: método de trabalho, operadores, condições do equipamento e entrega de turno.";
+    } else if (turno_problema && classifVariacao.slug === 'yellow') {
+      acaoRecomendada = `Turno ${turno_problema.turno} apresenta queda de performance. ` +
+        "Verificar treinamento da equipe e padronização da operação.";
+    }
+
+    res.status(200).json({
+      linha_id:   parseInt(linhaId),
+      linha_nome: linha.nome,
+      periodo_analisado: {
+        data_inicio: data_inicio || "início dos registros",
+        data_fim:    data_fim    || "último registro"
+      },
+      total_pecas_produzidas: totalPecas,
+      analise_comparativa: {
+        delta_oee_percentual:  deltaOEE,
+        turno_referencia:      turno_referencia
+          ? { turno: turno_referencia.turno, oee_medio: turno_referencia.oee_medio }
+          : null,
+        turno_problema:        turno_problema
+          ? { turno: turno_problema.turno, oee_medio: turno_problema.oee_medio }
+          : null,
+        classificacao:         classifVariacao,
+        acao_recomendada:      acaoRecomendada
+      },
+      dados_por_turno: dadosPorTurno,
+      referencias: {
+        variacao_atencao:        `Δ OEE > ${LIMIARES_TURNO.variacao_oee_atencao} pp entre turnos`,
+        variacao_critica:        `Δ OEE > ${LIMIARES_TURNO.variacao_oee_critico} pp entre turnos`,
+        oee_minimo_aceitavel:    `${LIMIARES_TURNO.oee_minimo_aceitavel}% por turno`,
+        refugo_max_percentual:   `${LIMIARES_TURNO.refugo_max_percentual}% da produção`
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na análise por turno da linha:", error.message);
+    res.status(500).json({ erro: "Falha ao processar análise por turno." });
+  }
+});
+
+// ----------------------------------------
+// 2️⃣ COMPARATIVO POR TURNO — EMPRESA
+// Visão macro: todos os turnos de todas as linhas da empresa
+// Rota: GET /api/turnos/empresa/:empresaId
+// Query params: data_inicio, data_fim (YYYY-MM-DD)
+// ----------------------------------------
+app.get("/api/turnos/empresa/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  try {
+    // OEE por linha + turno
+    let query = `
+      SELECT
+        l.id                                    AS linha_id,
+        l.nome                                  AS linha_nome,
+        po.turno,
+        COUNT(*)                                AS registros,
+        ROUND(AVG(po.oee)::NUMERIC, 2)          AS oee_medio,
+        ROUND(AVG(po.disponibilidade)::NUMERIC, 2) AS disponibilidade_media,
+        ROUND(AVG(po.performance)::NUMERIC, 2)  AS performance_media,
+        ROUND(AVG(po.qualidade)::NUMERIC, 2)    AS qualidade_media,
+        SUM(po.pecas_produzidas)                AS total_pecas,
+        SUM(po.pecas_produzidas) - SUM(po.pecas_boas) AS total_refugo
+      FROM producao_oee po
+      JOIN linhas_producao l ON l.id = po.linha_id
+      WHERE l.empresa_id = $1
+    `;
+    const values = [empresaId];
+    let idx = 2;
+
+    if (data_inicio) { query += ` AND po.data >= $${idx}`; values.push(data_inicio); idx++; }
+    if (data_fim)    { query += ` AND po.data <= $${idx}`; values.push(data_fim);    idx++; }
+
+    query += " GROUP BY l.id, l.nome, po.turno ORDER BY l.nome, po.turno ASC";
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        erro: "Nenhum dado de produção encontrado para esta empresa.",
+        dica: "Registre produções em producao_oee com o campo turno preenchido."
+      });
+    }
+
+    // Agrupar por linha
+    const linhasMap = {};
+    result.rows.forEach(row => {
+      if (!linhasMap[row.linha_id]) {
+        linhasMap[row.linha_id] = {
+          linha_id:   row.linha_id,
+          linha_nome: row.linha_nome,
+          turnos:     []
+        };
+      }
+      linhasMap[row.linha_id].turnos.push({
+        turno:                parseInt(row.turno),
+        registros:            parseInt(row.registros),
+        oee_medio:            parseFloat(row.oee_medio),
+        disponibilidade_media: parseFloat(row.disponibilidade_media),
+        performance_media:    parseFloat(row.performance_media),
+        qualidade_media:      parseFloat(row.qualidade_media),
+        total_pecas:          parseInt(row.total_pecas)  || 0,
+        total_refugo:         parseInt(row.total_refugo) || 0
+      });
+    });
+
+    // Para cada linha calcular delta e identificar turno problema
+    const analisesPorLinha = Object.values(linhasMap).map(linha => {
+      const { turno_referencia, turno_problema } = identificarTurnosExtremos(
+        linha.turnos.map(t => ({ ...t, oee_medio: t.oee_medio }))
+      );
+
+      const oeeValidos = linha.turnos.map(t => t.oee_medio).filter(v => v !== null);
+      const deltaOEE   = oeeValidos.length >= 2
+        ? parseFloat((Math.max(...oeeValidos) - Math.min(...oeeValidos)).toFixed(2))
+        : null;
+
+      const classif = classificarVariacaoTurno(deltaOEE);
+
+      return {
+        ...linha,
+        delta_oee:         deltaOEE,
+        turno_referencia:  turno_referencia
+          ? { turno: turno_referencia.turno, oee_medio: turno_referencia.oee_medio }
+          : null,
+        turno_problema:    turno_problema
+          ? { turno: turno_problema.turno, oee_medio: turno_problema.oee_medio }
+          : null,
+        classificacao:     classif
+      };
+    });
+
+    // Resumo geral da empresa
+    const linhasCriticas  = analisesPorLinha.filter(l => l.classificacao.slug === 'red');
+    const linhasAtencao   = analisesPorLinha.filter(l => l.classificacao.slug === 'yellow');
+    const linhasEstaveis  = analisesPorLinha.filter(l => l.classificacao.slug === 'green');
+    const statusGeral     = linhasCriticas.length > 0  ? 'red'    :
+                            linhasAtencao.length  > 0  ? 'yellow' :
+                            linhasEstaveis.length > 0  ? 'green'  : 'gray';
+
+    res.status(200).json({
+      empresa_id: parseInt(empresaId),
+      periodo_analisado: {
+        data_inicio: data_inicio || "início dos registros",
+        data_fim:    data_fim    || "último registro"
+      },
+      resumo: {
+        total_linhas_analisadas: analisesPorLinha.length,
+        linhas_criticas:  linhasCriticas.length,
+        linhas_atencao:   linhasAtencao.length,
+        linhas_estaveis:  linhasEstaveis.length,
+        status_geral:     statusGeral
+      },
+      linhas_criticas,
+      analise_por_linha: analisesPorLinha,
+      referencias: {
+        variacao_atencao: `Δ OEE > ${LIMIARES_TURNO.variacao_oee_atencao} pp entre turnos`,
+        variacao_critica: `Δ OEE > ${LIMIARES_TURNO.variacao_oee_critico} pp entre turnos`
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erro na análise por turno da empresa:", error.message);
+    res.status(500).json({ erro: "Falha ao processar análise por turno da empresa." });
+  }
+});
+
+// ----------------------------------------
+// 3️⃣ SÉRIE HISTÓRICA DE UM TURNO ESPECÍFICO
+// Evolução de OEE de um turno ao longo do tempo em uma linha
+// Rota: GET /api/turnos/historico/:linhaId/:turno
+// Query params: data_inicio, data_fim (YYYY-MM-DD)
+// ----------------------------------------
+app.get("/api/turnos/historico/:linhaId/:turno", autenticarToken, async (req, res) => {
+  const { linhaId, turno } = req.params;
+  const { data_inicio, data_fim } = req.query;
+
+  const turnoNum = parseInt(turno);
+  if (![1, 2, 3].includes(turnoNum)) {
+    return res.status(400).json({ erro: "Turno inválido. Use 1, 2 ou 3." });
+  }
+
+  try {
+    let query = `
+      SELECT
+        data,
+        oee,
+        disponibilidade,
+        performance,
+        qualidade,
+        pecas_produzidas,
+        pecas_boas,
+        pecas_produzidas - pecas_boas AS refugo
+      FROM producao_oee
+      WHERE linha_id = $1 AND turno = $2
+    `;
+    const values = [linhaId, turnoNum];
+    let idx = 3;
+
+    if (data_inicio) { query += ` AND data >= $${idx}`; values.push(data_inicio); idx++; }
+    if (data_fim)    { query += ` AND data <= $${idx}`; values.push(data_fim);    idx++; }
+
+    query += " ORDER BY data ASC";
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        erro: `Sem registros para o Turno ${turnoNum} nesta linha no período informado.`
+      });
+    }
+
+    // Calcular tendência (média móvel de 7 pontos)
+    const serie = result.rows.map((row, i, arr) => {
+      const janela = arr.slice(Math.max(0, i - 3), i + 4);
+      const mediaMovel = janela.reduce((a, b) => a + parseFloat(b.oee), 0) / janela.length;
+      return {
+        data:              row.data,
+        oee:               parseFloat(row.oee),
+        disponibilidade:   parseFloat(row.disponibilidade),
+        performance:       parseFloat(row.performance),
+        qualidade:         parseFloat(row.qualidade),
+        pecas_produzidas:  parseInt(row.pecas_produzidas) || 0,
+        pecas_boas:        parseInt(row.pecas_boas)       || 0,
+        refugo:            parseInt(row.refugo)           || 0,
+        media_movel_oee:   parseFloat(mediaMovel.toFixed(2))
+      };
+    });
+
+    // Estatísticas do período
+    const oeeValores = serie.map(s => s.oee);
+    const oeeMedia   = oeeValores.reduce((a, b) => a + b, 0) / oeeValores.length;
+    const oeeMin     = Math.min(...oeeValores);
+    const oeeMax     = Math.max(...oeeValores);
+
+    // Tendência: compara primeira metade com segunda metade
+    const metade     = Math.floor(serie.length / 2);
+    const mediaAntes = serie.slice(0, metade).reduce((a, b) => a + b.oee, 0) / metade;
+    const mediaDepois = serie.slice(metade).reduce((a, b) => a + b.oee, 0) / (serie.length - metade);
+    const tendencia   = mediaDepois > mediaAntes + 2  ? 'melhora'   :
+                        mediaDepois < mediaAntes - 2  ? 'piora'     : 'estavel';
+
+    res.status(200).json({
+      linha_id:  parseInt(linhaId),
+      turno:     turnoNum,
+      periodo_analisado: {
+        data_inicio: data_inicio || serie[0].data,
+        data_fim:    data_fim    || serie[serie.length - 1].data
+      },
+      estatisticas_periodo: {
+        total_registros: serie.length,
+        oee_medio:       parseFloat(oeeMedia.toFixed(2)),
+        oee_minimo:      oeeMin,
+        oee_maximo:      oeeMax,
+        tendencia,
+        descricao_tendencia:
+          tendencia === 'melhora'  ? "OEE em melhora ao longo do período." :
+          tendencia === 'piora'    ? "OEE em queda ao longo do período. Investigar causas." :
+                                    "OEE estável ao longo do período."
+      },
+      serie_historica: serie
+    });
+
+  } catch (error) {
+    console.error("❌ Erro no histórico por turno:", error.message);
+    res.status(500).json({ erro: "Falha ao buscar histórico do turno." });
+  }
+});
+
+// ========================================
+// 🔍 MÓDULO: ANÁLISE DE CAUSA RAIZ
+// 5 Porquês + Diagrama de Ishikawa (6M)
+// ========================================
+
+/**
+ * ⚠️ SQL NECESSÁRIO ANTES DE USAR ESTE MÓDULO
+ * Execute no seu banco Neon antes de subir o backend:
+ *
+ * -- Tabela principal: registro do problema
+ * CREATE TABLE IF NOT EXISTS causas_raiz (
+ *   id                SERIAL PRIMARY KEY,
+ *   empresa_id        INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+ *   linha_id          INTEGER REFERENCES linhas_producao(id) ON DELETE SET NULL,
+ *   posto_id          INTEGER REFERENCES posto_trabalho(id) ON DELETE SET NULL,
+ *   titulo            VARCHAR(200) NOT NULL,
+ *   descricao_problema TEXT NOT NULL,
+ *   categoria_ishikawa VARCHAR(20) CHECK (categoria_ishikawa IN (
+ *     'mao_de_obra','maquina','metodo','material','meio_ambiente','medicao'
+ *   )),
+ *   causa_raiz_final  TEXT,
+ *   acao_corretiva    TEXT,
+ *   responsavel       VARCHAR(100),
+ *   prazo             DATE,
+ *   status            VARCHAR(20) DEFAULT 'aberto'
+ *                     CHECK (status IN ('aberto','em_andamento','concluido','cancelado')),
+ *   eficacia_verificada BOOLEAN DEFAULT FALSE,
+ *   criado_por        INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+ *   criado_em         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ *   atualizado_em     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+ * );
+ *
+ * -- Tabela dos porquês (cadeia encadeada)
+ * CREATE TABLE IF NOT EXISTS cinco_porques (
+ *   id             SERIAL PRIMARY KEY,
+ *   causa_raiz_id  INTEGER NOT NULL REFERENCES causas_raiz(id) ON DELETE CASCADE,
+ *   numero         INTEGER NOT NULL CHECK (numero BETWEEN 1 AND 5),
+ *   pergunta       TEXT NOT NULL,
+ *   resposta       TEXT,
+ *   criado_em      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ *   UNIQUE (causa_raiz_id, numero)
+ * );
+ *
+ * -- Tabela das categorias do Ishikawa (6M)
+ * CREATE TABLE IF NOT EXISTS ishikawa_causas (
+ *   id             SERIAL PRIMARY KEY,
+ *   causa_raiz_id  INTEGER NOT NULL REFERENCES causas_raiz(id) ON DELETE CASCADE,
+ *   categoria      VARCHAR(20) NOT NULL CHECK (categoria IN (
+ *     'mao_de_obra','maquina','metodo','material','meio_ambiente','medicao'
+ *   )),
+ *   causa          TEXT NOT NULL,
+ *   subcausa       TEXT,
+ *   criado_em      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+ * );
+ *
+ * -- Índices de performance
+ * CREATE INDEX IF NOT EXISTS idx_causas_raiz_empresa ON causas_raiz(empresa_id);
+ * CREATE INDEX IF NOT EXISTS idx_causas_raiz_linha   ON causas_raiz(linha_id);
+ * CREATE INDEX IF NOT EXISTS idx_cinco_porques_cr    ON cinco_porques(causa_raiz_id);
+ * CREATE INDEX IF NOT EXISTS idx_ishikawa_cr         ON ishikawa_causas(causa_raiz_id);
+ */
+
+/**
+ * MAPEAMENTO DOS 6M DO ISHIKAWA
+ * Usado para validação e para o frontend gerar o diagrama
+ */
+const CATEGORIAS_6M = {
+  mao_de_obra:    { label: 'Mão de Obra',    descricao: 'Problemas relacionados a pessoas, treinamento, habilidade ou fadiga' },
+  maquina:        { label: 'Máquina',        descricao: 'Falhas, desgastes, setup ou manutenção inadequada de equipamentos' },
+  metodo:         { label: 'Método',         descricao: 'Procedimentos incorretos, ausência de POP ou método inconsistente' },
+  material:       { label: 'Material',       descricao: 'Matéria-prima fora de especificação ou armazenamento incorreto' },
+  meio_ambiente:  { label: 'Meio Ambiente',  descricao: 'Temperatura, umidade, vibração, ruído ou limpeza do ambiente' },
+  medicao:        { label: 'Medição',        descricao: 'Instrumentos descalibrados, método de medição incorreto ou erro do operador' }
+};
+
+const STATUS_VALIDOS = ['aberto', 'em_andamento', 'concluido', 'cancelado'];
+
+// ----------------------------------------
+// 1️⃣ CRIAR ANÁLISE DE CAUSA RAIZ
+// Abre um novo registro de problema para investigação
+// Rota: POST /api/causa-raiz
+// ----------------------------------------
+app.post("/api/causa-raiz", autenticarToken, async (req, res) => {
+  const {
+    empresa_id,
+    linha_id,
+    posto_id,
+    titulo,
+    descricao_problema,
+    categoria_ishikawa,
+    responsavel,
+    prazo
+  } = req.body;
+
+  if (!empresa_id || !titulo || !descricao_problema) {
+    return res.status(400).json({
+      erro: "Campos obrigatórios: empresa_id, titulo, descricao_problema."
+    });
+  }
+
+  if (categoria_ishikawa && !Object.keys(CATEGORIAS_6M).includes(categoria_ishikawa)) {
+    return res.status(400).json({
+      erro: `Categoria inválida. Use: ${Object.keys(CATEGORIAS_6M).join(', ')}`
+    });
+  }
+
+  try {
+    const result = await pool.query(`
+      INSERT INTO causas_raiz
+        (empresa_id, linha_id, posto_id, titulo, descricao_problema,
+         categoria_ishikawa, responsavel, prazo, status, criado_por)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'aberto',$9)
+      RETURNING *
+    `, [
+      empresa_id,
+      linha_id    || null,
+      posto_id    || null,
+      titulo.trim(),
+      descricao_problema.trim(),
+      categoria_ishikawa || null,
+      responsavel || null,
+      prazo       || null,
+      req.usuario.id
+    ]);
+
+    const registro = result.rows[0];
+
+    // Criar automaticamente os 5 slots de porquês
+    const porques = [];
+    for (let i = 1; i <= 5; i++) {
+      const pq = await pool.query(`
+        INSERT INTO cinco_porques (causa_raiz_id, numero, pergunta)
+        VALUES ($1, $2, $3)
+        RETURNING *
+      `, [
+        registro.id,
+        i,
+        i === 1
+          ? `Por que "${titulo}" aconteceu?`
+          : `Por que (resposta ${i - 1}) ocorreu?`
+      ]);
+      porques.push(pq.rows[0]);
+    }
+
+    console.log(`🔍 Análise de causa raiz criada: "${titulo}" (ID: ${registro.id})`);
+
+    res.status(201).json({
+      mensagem: "Análise de causa raiz iniciada. Os 5 Porquês foram criados automaticamente.",
+      causa_raiz: registro,
+      cinco_porques: porques,
+      proximos_passos: [
+        "1. Preencha as respostas dos 5 Porquês via PUT /api/causa-raiz/:id/porques/:numero",
+        "2. Adicione causas ao Ishikawa via POST /api/causa-raiz/:id/ishikawa",
+        "3. Registre a causa raiz final e ação corretiva via PUT /api/causa-raiz/:id"
+      ]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao criar causa raiz:", error.message);
+    res.status(500).json({ erro: "Falha ao criar análise de causa raiz." });
+  }
+});
+
+// ----------------------------------------
+// 2️⃣ LISTAR ANÁLISES DE CAUSA RAIZ
+// Rota: GET /api/causa-raiz
+// Query params: empresa_id (obrigatório), status, linha_id
+// ----------------------------------------
+app.get("/api/causa-raiz", autenticarToken, async (req, res) => {
+  const { empresa_id, status, linha_id } = req.query;
+
+  if (!empresa_id) {
+    return res.status(400).json({ erro: "O parâmetro empresa_id é obrigatório." });
+  }
+
+  try {
+    let query = `
+      SELECT
+        cr.*,
+        l.nome  AS linha_nome,
+        pt.nome AS posto_nome,
+        u.nome  AS criado_por_nome,
+        (SELECT COUNT(*) FROM cinco_porques cp
+         WHERE cp.causa_raiz_id = cr.id AND cp.resposta IS NOT NULL) AS porques_respondidos,
+        (SELECT COUNT(*) FROM ishikawa_causas ic
+         WHERE ic.causa_raiz_id = cr.id) AS causas_ishikawa
+      FROM causas_raiz cr
+      LEFT JOIN linhas_producao  l  ON l.id  = cr.linha_id
+      LEFT JOIN posto_trabalho   pt ON pt.id = cr.posto_id
+      LEFT JOIN usuarios         u  ON u.id  = cr.criado_por
+      WHERE cr.empresa_id = $1
+    `;
+    const values = [empresa_id];
+    let idx = 2;
+
+    if (status)   { query += ` AND cr.status = $${idx}`;   values.push(status);   idx++; }
+    if (linha_id) { query += ` AND cr.linha_id = $${idx}`; values.push(linha_id); idx++; }
+
+    query += " ORDER BY cr.criado_em DESC";
+    const result = await pool.query(query, values);
+
+    // Agrupar por status para facilitar kanban no frontend
+    const agrupado = {
+      aberto:       result.rows.filter(r => r.status === 'aberto'),
+      em_andamento: result.rows.filter(r => r.status === 'em_andamento'),
+      concluido:    result.rows.filter(r => r.status === 'concluido'),
+      cancelado:    result.rows.filter(r => r.status === 'cancelado')
+    };
+
+    res.status(200).json({
+      total: result.rows.length,
+      agrupado_por_status: agrupado,
+      lista: result.rows
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao listar causas raiz:", error.message);
+    res.status(500).json({ erro: "Falha ao listar análises de causa raiz." });
+  }
+});
+
+// ----------------------------------------
+// 3️⃣ BUSCAR ANÁLISE COMPLETA (COM PORQUÊS E ISHIKAWA)
+// Rota: GET /api/causa-raiz/:id
+// ----------------------------------------
+app.get("/api/causa-raiz/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Buscar registro principal
+    const crRes = await pool.query(`
+      SELECT
+        cr.*,
+        l.nome  AS linha_nome,
+        pt.nome AS posto_nome,
+        u.nome  AS criado_por_nome
+      FROM causas_raiz cr
+      LEFT JOIN linhas_producao  l  ON l.id  = cr.linha_id
+      LEFT JOIN posto_trabalho   pt ON pt.id = cr.posto_id
+      LEFT JOIN usuarios         u  ON u.id  = cr.criado_por
+      WHERE cr.id = $1
+    `, [id]);
+
+    if (crRes.rows.length === 0) {
+      return res.status(404).json({ erro: "Análise de causa raiz não encontrada." });
+    }
+
+    const cr = crRes.rows[0];
+
+    // Buscar os 5 porquês
+    const porquesRes = await pool.query(
+      "SELECT * FROM cinco_porques WHERE causa_raiz_id = $1 ORDER BY numero ASC",
+      [id]
+    );
+
+    // Buscar causas do Ishikawa agrupadas por categoria
+    const ishikawaRes = await pool.query(
+      "SELECT * FROM ishikawa_causas WHERE causa_raiz_id = $1 ORDER BY categoria, id ASC",
+      [id]
+    );
+
+    // Montar diagrama Ishikawa por categoria
+    const ishikawaPorCategoria = Object.keys(CATEGORIAS_6M).reduce((acc, cat) => {
+      acc[cat] = {
+        ...CATEGORIAS_6M[cat],
+        causas: ishikawaRes.rows
+          .filter(r => r.categoria === cat)
+          .map(r => ({ id: r.id, causa: r.causa, subcausa: r.subcausa }))
+      };
+      return acc;
+    }, {});
+
+    // Calcular progresso da análise
+    const porquesRespondidos = porquesRes.rows.filter(p => p.resposta).length;
+    const temCausaRaizFinal  = !!cr.causa_raiz_final;
+    const temAcaoCorretiva   = !!cr.acao_corretiva;
+    const totalCausasIshikawa = ishikawaRes.rows.length;
+
+    const progresso = {
+      porques_respondidos:    porquesRespondidos,
+      porques_total:          5,
+      tem_causa_raiz_final:   temCausaRaizFinal,
+      tem_acao_corretiva:     temAcaoCorretiva,
+      total_causas_ishikawa:  totalCausasIshikawa,
+      percentual_completo: Math.round(
+        ((porquesRespondidos / 5) * 40 +
+        (temCausaRaizFinal  ? 30 : 0) +
+        (temAcaoCorretiva   ? 30 : 0))
+      )
+    };
+
+    res.status(200).json({
+      causa_raiz:            cr,
+      cinco_porques:         porquesRes.rows,
+      ishikawa_por_categoria: ishikawaPorCategoria,
+      ishikawa_lista:        ishikawaRes.rows,
+      progresso,
+      categorias_disponiveis: CATEGORIAS_6M
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao buscar causa raiz:", error.message);
+    res.status(500).json({ erro: "Falha ao buscar análise de causa raiz." });
+  }
+});
+
+// ----------------------------------------
+// 4️⃣ ATUALIZAR ANÁLISE (causa raiz final, ação, status)
+// Rota: PUT /api/causa-raiz/:id
+// ----------------------------------------
+app.put("/api/causa-raiz/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const {
+    titulo,
+    descricao_problema,
+    categoria_ishikawa,
+    causa_raiz_final,
+    acao_corretiva,
+    responsavel,
+    prazo,
+    status,
+    eficacia_verificada
+  } = req.body;
+
+  if (status && !STATUS_VALIDOS.includes(status)) {
+    return res.status(400).json({
+      erro: `Status inválido. Use: ${STATUS_VALIDOS.join(', ')}`
+    });
+  }
+
+  if (categoria_ishikawa && !Object.keys(CATEGORIAS_6M).includes(categoria_ishikawa)) {
+    return res.status(400).json({
+      erro: `Categoria inválida. Use: ${Object.keys(CATEGORIAS_6M).join(', ')}`
+    });
+  }
+
+  try {
+    const result = await pool.query(`
+      UPDATE causas_raiz SET
+        titulo              = COALESCE($1,  titulo),
+        descricao_problema  = COALESCE($2,  descricao_problema),
+        categoria_ishikawa  = COALESCE($3,  categoria_ishikawa),
+        causa_raiz_final    = COALESCE($4,  causa_raiz_final),
+        acao_corretiva      = COALESCE($5,  acao_corretiva),
+        responsavel         = COALESCE($6,  responsavel),
+        prazo               = COALESCE($7,  prazo),
+        status              = COALESCE($8,  status),
+        eficacia_verificada = COALESCE($9,  eficacia_verificada),
+        atualizado_em       = CURRENT_TIMESTAMP
+      WHERE id = $10
+      RETURNING *
+    `, [
+      titulo?.trim(),
+      descricao_problema?.trim(),
+      categoria_ishikawa,
+      causa_raiz_final?.trim(),
+      acao_corretiva?.trim(),
+      responsavel,
+      prazo || null,
+      status,
+      eficacia_verificada !== undefined ? eficacia_verificada : null,
+      id
+    ]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Análise não encontrada." });
+    }
+
+    res.status(200).json({
+      mensagem: "Análise atualizada com sucesso.",
+      causa_raiz: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao atualizar causa raiz:", error.message);
+    res.status(500).json({ erro: "Falha ao atualizar análise de causa raiz." });
+  }
+});
+
+// ----------------------------------------
+// 5️⃣ RESPONDER UM PORQUÊ ESPECÍFICO
+// Rota: PUT /api/causa-raiz/:id/porques/:numero
+// Body: { resposta: "..." }
+// ----------------------------------------
+app.put("/api/causa-raiz/:id/porques/:numero", autenticarToken, async (req, res) => {
+  const { id, numero } = req.params;
+  const { resposta, pergunta } = req.body;
+  const num = parseInt(numero);
+
+  if (![1, 2, 3, 4, 5].includes(num)) {
+    return res.status(400).json({ erro: "Número do porquê deve ser entre 1 e 5." });
+  }
+
+  if (!resposta || !resposta.trim()) {
+    return res.status(400).json({ erro: "A resposta não pode estar vazia." });
+  }
+
+  try {
+    // Verificar se a análise existe
+    const crCheck = await pool.query(
+      "SELECT id, titulo FROM causas_raiz WHERE id = $1", [id]
+    );
+    if (crCheck.rows.length === 0) {
+      return res.status(404).json({ erro: "Análise de causa raiz não encontrada." });
+    }
+
+    // Atualizar o porquê
+    const result = await pool.query(`
+      UPDATE cinco_porques
+      SET
+        resposta  = $1,
+        pergunta  = COALESCE($2, pergunta)
+      WHERE causa_raiz_id = $3 AND numero = $4
+      RETURNING *
+    `, [resposta.trim(), pergunta?.trim() || null, id, num]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: `Porquê número ${num} não encontrado.` });
+    }
+
+    // Atualizar pergunta do próximo porquê automaticamente (se existir)
+    if (num < 5) {
+      await pool.query(`
+        UPDATE cinco_porques
+        SET pergunta = $1
+        WHERE causa_raiz_id = $2 AND numero = $3 AND resposta IS NULL
+      `, [`Por que "${resposta.trim()}" ocorreu?`, id, num + 1]);
+    }
+
+    // Checar se todos os 5 foram respondidos para sugerir status
+    const totalRespondidos = await pool.query(
+      "SELECT COUNT(*) FROM cinco_porques WHERE causa_raiz_id = $1 AND resposta IS NOT NULL",
+      [id]
+    );
+    const qtd = parseInt(totalRespondidos.rows[0].count);
+
+    res.status(200).json({
+      mensagem: `Porquê ${num} salvo com sucesso.`,
+      porque:   result.rows[0],
+      progresso: {
+        respondidos: qtd,
+        total: 5,
+        completo: qtd === 5
+      },
+      dica: qtd === 5
+        ? "Todos os 5 Porquês foram respondidos. Registre agora a causa raiz final via PUT /api/causa-raiz/:id"
+        : `Faltam ${5 - qtd} porquê(s) para completar a análise.`
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao responder porquê:", error.message);
+    res.status(500).json({ erro: "Falha ao salvar resposta do porquê." });
+  }
+});
+
+// ----------------------------------------
+// 6️⃣ ADICIONAR CAUSA AO DIAGRAMA ISHIKAWA
+// Rota: POST /api/causa-raiz/:id/ishikawa
+// Body: { categoria, causa, subcausa }
+// ----------------------------------------
+app.post("/api/causa-raiz/:id/ishikawa", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+  const { categoria, causa, subcausa } = req.body;
+
+  if (!categoria || !causa) {
+    return res.status(400).json({
+      erro: "Categoria e causa são obrigatórios.",
+      categorias_validas: Object.keys(CATEGORIAS_6M)
+    });
+  }
+
+  if (!Object.keys(CATEGORIAS_6M).includes(categoria)) {
+    return res.status(400).json({
+      erro: `Categoria inválida. Use: ${Object.keys(CATEGORIAS_6M).join(', ')}`
+    });
+  }
+
+  try {
+    // Verificar se a análise existe
+    const crCheck = await pool.query(
+      "SELECT id FROM causas_raiz WHERE id = $1", [id]
+    );
+    if (crCheck.rows.length === 0) {
+      return res.status(404).json({ erro: "Análise de causa raiz não encontrada." });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO ishikawa_causas (causa_raiz_id, categoria, causa, subcausa)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [id, categoria, causa.trim(), subcausa?.trim() || null]);
+
+    const catInfo = CATEGORIAS_6M[categoria];
+
+    res.status(201).json({
+      mensagem: `Causa adicionada à categoria "${catInfo.label}" do Ishikawa.`,
+      ishikawa: result.rows[0],
+      categoria_info: catInfo
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao adicionar causa ao Ishikawa:", error.message);
+    res.status(500).json({ erro: "Falha ao registrar causa no diagrama Ishikawa." });
+  }
+});
+
+// ----------------------------------------
+// 7️⃣ REMOVER CAUSA DO ISHIKAWA
+// Rota: DELETE /api/causa-raiz/:id/ishikawa/:ishikawaId
+// ----------------------------------------
+app.delete("/api/causa-raiz/:id/ishikawa/:ishikawaId", autenticarToken, async (req, res) => {
+  const { id, ishikawaId } = req.params;
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM ishikawa_causas WHERE id = $1 AND causa_raiz_id = $2 RETURNING *",
+      [ishikawaId, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Causa não encontrada no Ishikawa." });
+    }
+
+    res.status(200).json({
+      mensagem: "Causa removida do diagrama Ishikawa.",
+      removido: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao remover causa do Ishikawa:", error.message);
+    res.status(500).json({ erro: "Falha ao remover causa do Ishikawa." });
+  }
+});
+
+// ----------------------------------------
+// 8️⃣ EXCLUIR ANÁLISE COMPLETA
+// Rota: DELETE /api/causa-raiz/:id
+// ----------------------------------------
+app.delete("/api/causa-raiz/:id", autenticarToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // O CASCADE no banco remove porquês e ishikawa automaticamente
+    const result = await pool.query(
+      "DELETE FROM causas_raiz WHERE id = $1 RETURNING titulo",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Análise não encontrada." });
+    }
+
+    res.status(200).json({
+      mensagem: `Análise "${result.rows[0].titulo}" removida com sucesso.`
+    });
+
+  } catch (error) {
+    console.error("❌ Erro ao excluir causa raiz:", error.message);
+    res.status(500).json({ erro: "Falha ao excluir análise de causa raiz." });
+  }
+});
+
+// ----------------------------------------
+// 9️⃣ DASHBOARD DE CAUSA RAIZ POR EMPRESA
+// Métricas gerais para o painel do consultor
+// Rota: GET /api/causa-raiz/dashboard/:empresaId
+// ----------------------------------------
+app.get("/api/causa-raiz/dashboard/:empresaId", autenticarToken, async (req, res) => {
+  const { empresaId } = req.params;
+
+  try {
+    // Contagem por status
+    const statusRes = await pool.query(`
+      SELECT
+        COUNT(*)                                           AS total,
+        COUNT(*) FILTER (WHERE status = 'aberto')         AS abertos,
+        COUNT(*) FILTER (WHERE status = 'em_andamento')   AS em_andamento,
+        COUNT(*) FILTER (WHERE status = 'concluido')      AS concluidos,
+        COUNT(*) FILTER (WHERE status = 'cancelado')      AS cancelados,
+        COUNT(*) FILTER (WHERE eficacia_verificada = true) AS eficacia_confirmada,
+        COUNT(*) FILTER (WHERE prazo < CURRENT_DATE
+                          AND status NOT IN ('concluido','cancelado')) AS atrasados
+      FROM causas_raiz
+      WHERE empresa_id = $1
+    `, [empresaId]);
+
+    // Categoria mais recorrente no Ishikawa
+    const catRes = await pool.query(`
+      SELECT ic.categoria, COUNT(*) AS total
+      FROM ishikawa_causas ic
+      JOIN causas_raiz cr ON cr.id = ic.causa_raiz_id
+      WHERE cr.empresa_id = $1
+      GROUP BY ic.categoria
+      ORDER BY total DESC
+      LIMIT 1
+    `, [empresaId]);
+
+    // Análises atrasadas (com detalhe)
+    const atrasadasRes = await pool.query(`
+      SELECT
+        cr.id, cr.titulo, cr.prazo, cr.status, cr.responsavel,
+        l.nome AS linha_nome
+      FROM causas_raiz cr
+      LEFT JOIN linhas_producao l ON l.id = cr.linha_id
+      WHERE cr.empresa_id = $1
+        AND cr.prazo < CURRENT_DATE
+        AND cr.status NOT IN ('concluido', 'cancelado')
+      ORDER BY cr.prazo ASC
+    `, [empresaId]);
+
+    // Últimas análises abertas
+    const recentesRes = await pool.query(`
+      SELECT
+        cr.id, cr.titulo, cr.status, cr.criado_em,
+        cr.categoria_ishikawa, l.nome AS linha_nome,
+        (SELECT COUNT(*) FROM cinco_porques cp
+         WHERE cp.causa_raiz_id = cr.id AND cp.resposta IS NOT NULL) AS porques_respondidos
+      FROM causas_raiz cr
+      LEFT JOIN linhas_producao l ON l.id = cr.linha_id
+      WHERE cr.empresa_id = $1
+        AND cr.status IN ('aberto','em_andamento')
+      ORDER BY cr.criado_em DESC
+      LIMIT 5
+    `, [empresaId]);
+
+    const stats       = statusRes.rows[0];
+    const catMaisFreq = catRes.rows[0];
+
+    res.status(200).json({
+      empresa_id: parseInt(empresaId),
+      resumo: {
+        total:               parseInt(stats.total),
+        abertos:             parseInt(stats.abertos),
+        em_andamento:        parseInt(stats.em_andamento),
+        concluidos:          parseInt(stats.concluidos),
+        cancelados:          parseInt(stats.cancelados),
+        eficacia_confirmada: parseInt(stats.eficacia_confirmada),
+        atrasados:           parseInt(stats.atrasados),
+        taxa_conclusao:      parseInt(stats.total) > 0
+          ? parseFloat(((parseInt(stats.concluidos) / parseInt(stats.total)) * 100).toFixed(1))
+          : 0
+      },
+      categoria_mais_recorrente: catMaisFreq
+        ? {
+            categoria: catMaisFreq.categoria,
+            label:     CATEGORIAS_6M[catMaisFreq.categoria]?.label,
+            total:     parseInt(catMaisFreq.total)
+          }
+        : null,
+      analises_atrasadas:  atrasadasRes.rows,
+      analises_em_aberto:  recentesRes.rows,
+      categorias_6m:       CATEGORIAS_6M
+    });
+
+  } catch (error) {
+    console.error("❌ Erro no dashboard de causa raiz:", error.message);
+    res.status(500).json({ erro: "Falha ao gerar dashboard de causa raiz." });
+  }
+});
+
+// ========================================
 // 👥 RH - TREINAMENTO E HABILIDADES
 // ========================================
 
